@@ -169,17 +169,14 @@ async fn main() -> anyhow::Result<()> {
 }
 
 fn setup_tracing() -> anyhow::Result<()> {
-  tracing::subscriber::set_global_default(
-    tracing_subscriber::FmtSubscriber::builder()
-      .with_writer(std::io::stderr)
-      .with_env_filter(
-        tracing_subscriber::EnvFilter::builder()
-          .with_default_directive(tracing::metadata::LevelFilter::INFO.into())
-          .from_env_lossy(),
-      )
-      .finish(),
-  )?;
-  tracing_log::LogTracer::init()?;
+  tracing_subscriber::fmt()
+    .with_env_filter(
+      tracing_subscriber::EnvFilter::builder()
+        .with_default_directive(tracing_subscriber::filter::LevelFilter::INFO.into())
+        .from_env_lossy(),
+    )
+    .try_init()
+    .map_err(|e| anyhow::anyhow!(e))?;
 
   Ok(())
 }

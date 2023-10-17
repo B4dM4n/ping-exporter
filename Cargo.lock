@@ -1253,7 +1253,6 @@ dependencies = [
  "tide",
  "tokio",
  "tracing",
- "tracing-log",
  "tracing-subscriber",
  "trust-dns-resolver",
 ]
