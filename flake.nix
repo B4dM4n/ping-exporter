@@ -15,16 +15,16 @@
     flake-utils.lib.eachDefaultSystem (system: let
       pkgs = nixpkgs.legacyPackages.${system}.extend mozilla.overlays.rust;
 
-      rust =
+      rust-nightly =
         (pkgs.rustChannelOf {
-          sha256 = "sha256-54rlXRNdMMf/KXvzoXPXHfAFZW4vGoYsd5yy8MKG+dI=";
-          date = "2023-04-19";
+          sha256 = "sha256-tcbGLKsyRS9WASVCfs2fcLqA+WECB0l9SdfXO5vfpjI=";
+          date = "2023-10-17";
           channel = "nightly";
         })
         .rust;
 
-      rustfmt = pkgs.writeShellScriptBin "rustfmt" ''
-        exec ${rust}/bin/rustfmt "$@"
+      rustfmt-nightly = pkgs.writeShellScriptBin "rustfmt" ''
+        exec ${rust-nightly}/bin/rustfmt "$@"
       '';
     in {
       devShell = pkgs.mkShell {
@@ -35,10 +35,8 @@
           clippy
           rust-analyzer
           rustc
-          rustfmt
+          rustfmt-nightly
         ];
-
-        RUST_SRC_PATH = pkgs.rustPlatform.rustLibSrc;
       };
     });
 }
