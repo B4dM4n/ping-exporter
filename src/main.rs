@@ -37,6 +37,11 @@ async fn main() -> anyhow::Result<()> {
 
   let args = <args::Args as clap::Parser>::parse();
 
+  if args.print_buckets {
+    println!("{:?}", args.metrics.exponential_buckets().unwrap());
+    return Ok(());
+  }
+
   let resolver = TokioAsyncResolver::tokio_from_system_conf()?;
 
   let client_v4 = Client::new(&Config::default())?;

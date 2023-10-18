@@ -6,6 +6,10 @@ use clap::builder::TypedValueParser;
 #[derive(Debug, clap::Parser)]
 #[command(author, version, about, long_about = None)]
 pub struct Args {
+  /// Print the resulting exponential bucket list and exit.
+  #[arg(long)]
+  pub print_buckets: bool,
+
   /// Hostnames or addresses of the ping targets
   #[arg(value_name = "TARGET")]
   pub targets: Vec<String>,
