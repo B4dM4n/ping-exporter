@@ -16,6 +16,10 @@ use std::{
 };
 
 use arc_swap::ArcSwap;
+use hickory_resolver::{
+  error::{ResolveError, ResolveErrorKind},
+  TokioAsyncResolver,
+};
 use prometheus::{
   exponential_buckets, register_histogram_vec_with_registry,
   register_int_counter_vec_with_registry, Encoder, HistogramVec, IntCounterVec, Registry,
@@ -24,10 +28,6 @@ use rand::{seq::IteratorRandom, thread_rng};
 use surge_ping::{Client, Config, PingIdentifier, PingSequence, Pinger, SurgeError, ICMP};
 use tokio::sync::Notify;
 use tracing::{debug, error, info, trace, warn};
-use trust_dns_resolver::{
-  error::{ResolveError, ResolveErrorKind},
-  TokioAsyncResolver,
-};
 
 /// Prometheus exporter reporting ping statistics
 #[derive(Debug, clap::Parser)]
@@ -535,7 +535,7 @@ impl Target {
     resolver: &TokioAsyncResolver,
   ) -> Result<Option<Ipv4Addr>, ResolveError> {
     match resolver.ipv4_lookup(&self.hostname).await {
-      Ok(resp) => Ok(resp.into_iter().choose(&mut thread_rng())),
+      Ok(resp) => Ok(resp.into_iter().choose(&mut thread_rng()).map(Into::into)),
       Err(e) if matches!(e.kind(), ResolveErrorKind::NoRecordsFound { .. }) => Ok(None),
       Err(e) => Err(e),
     }
@@ -547,7 +547,7 @@ impl Target {
     resolver: &TokioAsyncResolver,
   ) -> Result<Option<Ipv6Addr>, ResolveError> {
     match resolver.ipv6_lookup(&self.hostname).await {
-      Ok(resp) => Ok(resp.into_iter().choose(&mut thread_rng())),
+      Ok(resp) => Ok(resp.into_iter().choose(&mut thread_rng()).map(Into::into)),
       Err(e) if matches!(e.kind(), ResolveErrorKind::NoRecordsFound { .. }) => Ok(None),
       Err(e) => Err(e),
     }
