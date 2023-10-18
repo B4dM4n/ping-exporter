@@ -5,6 +5,8 @@
   clippy::nursery
 )]
 
+mod args;
+
 use std::{
   future::Future,
   net::{IpAddr, Ipv4Addr, Ipv6Addr},
@@ -21,72 +23,19 @@ use hickory_resolver::{
   TokioAsyncResolver,
 };
 use prometheus::{
-  exponential_buckets, register_histogram_vec_with_registry,
-  register_int_counter_vec_with_registry, Encoder, HistogramVec, IntCounterVec, Registry,
+  register_histogram_vec_with_registry, register_int_counter_vec_with_registry, Encoder,
+  HistogramVec, IntCounterVec, Registry,
 };
 use rand::{seq::IteratorRandom, thread_rng};
 use surge_ping::{Client, Config, PingIdentifier, PingSequence, Pinger, SurgeError, ICMP};
 use tokio::sync::Notify;
 use tracing::{debug, error, info, trace, warn};
 
-/// Prometheus exporter reporting ping statistics
-#[derive(Debug, clap::Parser)]
-#[command(author, version, about, long_about = None)]
-struct Args {
-  /// Hostnames or addresses of the ping targets
-  #[arg(value_name = "TARGET")]
-  targets: Vec<String>,
-
-  /// Interval at which packets are send to the targets.
-  #[arg(short = 'i', long, default_value = "1s", value_name = "DURATION")]
-  send_interval: humantime::Duration,
-
-  /// Interval at which target hostnames are resolved.
-  #[arg(short = 'r', long, default_value = "60s", value_name = "DURATION")]
-  resolve_interval: humantime::Duration,
-
-  #[command(flatten)]
-  metrics: MetricsArgs,
-
-  ///Path under which to expose metrics
-  #[arg(
-    long = "web.telemetry-path",
-    default_value = "/metrics",
-    value_name = "PATH"
-  )]
-  web_telemetry_path: String,
-
-  /// Addresses on which to expose metrics and web interface.
-  #[arg(
-    long = "web.listen-address",
-    default_value = "0.0.0.0:9143",
-    value_name = "ADDRESS"
-  )]
-  web_listen_address: Vec<String>,
-}
-
-#[derive(Debug, clap::Args)]
-struct MetricsArgs {
-  /// Start value for the exponential bucket calculation of the RTT histogram.
-  #[arg(long, default_value = "1ms", value_name = "DURATION")]
-  buckets_start: humantime::Duration,
-
-  /// Multiplier value for the exponential bucket calculation of the RTT
-  /// histogram.
-  #[arg(long, default_value_t = 1.5, value_name = "FACTOR")]
-  buckets_factor: f64,
-
-  /// The number of buckets for the exponential bucket calculation of the RTT
-  /// histogram.
-  #[arg(long, default_value_t = 20, value_name = "COUNT")]
-  buckets_count: usize,
-}
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
   setup_tracing()?;
 
-  let args = <Args as clap::Parser>::parse();
+  let args = <args::Args as clap::Parser>::parse();
 
   let resolver = TokioAsyncResolver::tokio_from_system_conf()?;
 
@@ -189,16 +138,12 @@ struct Metrics {
   send_timeout: Duration,
 }
 
-fn setup_metrics(registry: &Registry, args: &MetricsArgs) -> anyhow::Result<Metrics> {
+fn setup_metrics(registry: &Registry, args: &args::MetricsArgs) -> anyhow::Result<Metrics> {
   registry.register(Box::new(
     prometheus::process_collector::ProcessCollector::for_self(),
   ))?;
 
-  let rtt_buckets = exponential_buckets(
-    args.buckets_start.as_secs_f64(),
-    args.buckets_factor,
-    args.buckets_count,
-  )?;
+  let rtt_buckets = args.exponential_buckets()?;
   let send_timeout = Duration::from_secs_f64(*rtt_buckets.last().unwrap());
   let ping_rtt = register_histogram_vec_with_registry!(
     "ping_rtt",
