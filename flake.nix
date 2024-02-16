@@ -1,27 +1,23 @@
 {
   inputs = {
     flake-utils.url = "github:numtide/flake-utils";
-    mozilla.url = "github:mozilla/nixpkgs-mozilla";
+    rust-overlay.url = "github:oxalica/rust-overlay";
+    rust-overlay.inputs.nixpkgs.follows = "nixpkgs";
+    rust-overlay.inputs.flake-utils.follows = "flake-utils";
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
   };
 
   outputs = {
     self,
     flake-utils,
-    mozilla,
     nixpkgs,
+    rust-overlay,
     ...
   }:
     flake-utils.lib.eachDefaultSystem (system: let
-      pkgs = nixpkgs.legacyPackages.${system}.extend mozilla.overlays.rust;
+      pkgs = nixpkgs.legacyPackages.${system}.extend rust-overlay.overlays.default;
 
-      rust-nightly =
-        (pkgs.rustChannelOf {
-          sha256 = "sha256-tcbGLKsyRS9WASVCfs2fcLqA+WECB0l9SdfXO5vfpjI=";
-          date = "2023-10-17";
-          channel = "nightly";
-        })
-        .rust;
+      rust-nightly = pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default);
 
       rustfmt-nightly = pkgs.writeShellScriptBin "rustfmt" ''
         exec ${rust-nightly}/bin/rustfmt "$@"
