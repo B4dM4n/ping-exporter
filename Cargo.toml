@@ -10,9 +10,9 @@ repository = "https://github.com/B4dM4n/ping-exporter"
 version = "0.1.0"
 
 [dependencies]
-anyhow = "1.0.75"
+anyhow = "1.0.79"
 arc-swap = "1.6.0"
-clap = { version = "4.4.6", features = ["derive"] }
+clap = { version = "4.5.0", features = ["derive"] }
 hickory-resolver = { version = "0.24.0", features = ["tokio"] }
 humantime = "2.1.0"
 nix = { version = "0.27.1", features = ["socket"] }
@@ -20,6 +20,6 @@ prometheus = { version = "0.13.3", default-features = false, features = ["proces
 rand = "0.8.5"
 surge-ping = "0.8.0"
 tide = { version = "0.16.0", default-features = false, features = ["h1-server"] }
-tokio = { version = "1.33.0", features = ["full"] }
-tracing = "0.1.39"
-tracing-subscriber = { version = "0.3.17", features = ["env-filter", "local-time"] }
+tokio = { version = "1.36.0", features = ["full"] }
+tracing = "0.1.40"
+tracing-subscriber = { version = "0.3.18", features = ["env-filter", "local-time"] }
