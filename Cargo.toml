@@ -12,14 +12,15 @@ version = "0.1.0"
 [dependencies]
 anyhow = "1.0.79"
 arc-swap = "1.6.0"
+axum = { version = "0.7.4", features = ["tracing"] }
 clap = { version = "4.5.0", features = ["derive"] }
+futures-util = { version = "0.3.30", default-features = false }
 hickory-resolver = { version = "0.24.0", features = ["tokio"] }
 humantime = "2.1.0"
 nix = { version = "0.27.1", features = ["socket"] }
 prometheus = { version = "0.13.3", default-features = false, features = ["process"] }
 rand = "0.8.5"
 surge-ping = "0.8.0"
-tide = { version = "0.16.0", default-features = false, features = ["h1-server"] }
-tokio = { version = "1.36.0", features = ["full"] }
+tokio = { version = "1.36.0", features = ["macros", "signal", "rt-multi-thread"] }
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter", "local-time"] }

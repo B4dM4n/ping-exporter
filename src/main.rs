@@ -8,11 +8,12 @@
 mod args;
 
 use std::{
-  future::Future,
+  future::IntoFuture,
+  io,
   net::{IpAddr, Ipv4Addr, Ipv6Addr},
   num::Wrapping,
   os::fd::BorrowedFd,
-  pin::{pin, Pin},
+  pin::pin,
   str::FromStr,
   sync::Arc,
   time::Duration,
@@ -93,26 +94,30 @@ async fn main() -> anyhow::Result<()> {
     })
     .collect::<Vec<_>>();
 
-  let mut app = pin!(tide_app(
-    args.web_telemetry_path,
-    args.web_listen_address,
-    registry
-  ));
-  let mut ctrl_c = pin!(tokio::signal::ctrl_c());
-
-  debug!("Waiting for Ctrl-C");
-  #[allow(clippy::redundant_pub_crate)]
   {
-    tokio::select! {
-      ret = &mut app => {
-        if let Err(e) = ret {
-          error!("Webserver failed: {:?}", e);
+    let mut app = pin!(metrics_app(
+      args.web_telemetry_path,
+      args.web_listen_address,
+      registry,
+    ));
+    let mut ctrl_c = pin!(tokio::signal::ctrl_c());
+
+    debug!("Waiting for Ctrl-C");
+    #[allow(clippy::redundant_pub_crate)]
+    {
+      tokio::select! {
+        ret = &mut app => {
+          if let Err(e) = ret {
+            error!("Webserver failed: {:?}", e);
+          }
         }
-      }
-      _ = &mut ctrl_c => {
-        debug!("Ctrl-C received");
-      }
-    };
+        _ = &mut ctrl_c => {
+          debug!("Ctrl-C received");
+        }
+      };
+    }
+
+    // drop app to shutdown the metrics server
   }
 
   target_send_args.notify_exit.notify_waiters();
@@ -196,45 +201,61 @@ fn setup_metrics(registry: &Registry, args: &args::MetricsArgs) -> anyhow::Resul
 }
 
 #[tracing::instrument(ret, skip(registry))]
-async fn tide_app(
-  web_telemetry_path: String,
-  web_listen_address: Vec<String>,
+async fn metrics_app(
+  mut web_telemetry_path: String,
+  web_listen_addresses: Vec<String>,
   registry: Registry,
 ) -> anyhow::Result<()> {
-  struct Metrics {
-    registry: Registry,
-  }
+  use axum::{
+    http::{header, StatusCode},
+    response::{IntoResponse, Response},
+    routing::get,
+    Router,
+  };
 
-  impl<State: Clone + Send + Sync + 'static> tide::Endpoint<State> for Metrics {
-    fn call<'life0, 'async_trait>(
-      &'life0 self,
-      _req: tide::Request<State>,
-    ) -> Pin<Box<dyn Future<Output = tide::Result> + Send + 'async_trait>>
-    where
-      'life0: 'async_trait,
-      Self: 'async_trait,
-    {
-      let mut buffer = Vec::with_capacity(4096);
-      let encoder = prometheus::TextEncoder::new();
-      let metric_families = self.registry.gather();
-
-      Box::pin(async move {
-        encoder.encode(&metric_families, &mut buffer)?;
-
-        Ok(
-          tide::Response::builder(tide::StatusCode::Ok)
-            .content_type(prometheus::TEXT_FORMAT)
-            .body(buffer.as_slice())
-            .build(),
-        )
-      })
+  fn metrics(registry: &Registry) -> Response {
+    let mut buffer = Vec::with_capacity(4096);
+    let encoder = prometheus::TextEncoder::new();
+    let metric_families = registry.gather();
+    if let Err(err) = encoder.encode(&metric_families, &mut buffer) {
+      return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response();
     }
+
+    ([(header::CONTENT_TYPE, prometheus::TEXT_FORMAT)], buffer).into_response()
   }
 
-  let mut app = tide::new();
-  app.at("/").get(|_req| async { Ok("") });
-  app.at(&web_telemetry_path).get(Metrics { registry });
-  app.listen(web_listen_address).await?;
+  if !web_telemetry_path.starts_with('/') {
+    web_telemetry_path.insert(0, '/');
+  }
+
+  let mut router = Router::new();
+  if web_telemetry_path != "/" {
+    router = router.route("/", get(|| async { "" }));
+  }
+
+  let app = router.route(
+    &web_telemetry_path,
+    get(|| async move { metrics(&registry) }),
+  );
+
+  let listeners = futures_util::future::join_all(
+    web_listen_addresses
+      .into_iter()
+      .map(tokio::net::TcpListener::bind),
+  )
+  .await
+  .into_iter()
+  .collect::<Result<Vec<_>, io::Error>>()?;
+
+  // poll all futures and return the result of the first completed one, which
+  // might be an error
+  futures_util::future::select_all(
+    listeners
+      .into_iter()
+      .map(|listener| axum::serve(listener, app.clone()).into_future()),
+  )
+  .await
+  .0?;
 
   Ok(())
 }
