@@ -27,7 +27,7 @@ pub struct Args {
   pub bind_device: Option<String>,
 
   #[command(flatten)]
-  pub metrics: MetricsArgs,
+  pub metrics: Metrics,
 
   ///Path under which to expose metrics
   #[arg(
@@ -47,7 +47,8 @@ pub struct Args {
 }
 
 #[derive(Debug, clap::Args)]
-pub struct MetricsArgs {
+#[allow(clippy::struct_field_names)]
+pub struct Metrics {
   /// Start value for the exponential bucket calculation of the RTT histogram.
   #[arg(
     long,
@@ -78,7 +79,7 @@ pub struct MetricsArgs {
   pub buckets_count: usize,
 }
 
-impl MetricsArgs {
+impl Metrics {
   pub fn exponential_buckets(&self) -> prometheus::Result<Vec<f64>> {
     prometheus::exponential_buckets(
       self.buckets_start.as_secs_f64(),
@@ -95,7 +96,7 @@ fn greater<T: Clone + Display + PartialOrd + Send + Sync + 'static>(
     if value > check {
       Ok(value)
     } else {
-      Err(format!("must be greater than {}", check))
+      Err(format!("must be greater than {check}"))
     }
   }
 }
@@ -108,10 +109,10 @@ where
   <T as Deref>::Target: PartialOrd,
 {
   move |value| {
-    if value.deref() > check.deref() {
+    if *value > *check {
       Ok(value)
     } else {
-      Err(format!("must be greater than {}", check))
+      Err(format!("must be greater than {check}"))
     }
   }
 }

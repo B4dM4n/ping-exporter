@@ -158,7 +158,7 @@ struct Metrics {
   send_timeout: Duration,
 }
 
-fn setup_metrics(registry: &Registry, args: &args::MetricsArgs) -> anyhow::Result<Metrics> {
+fn setup_metrics(registry: &Registry, args: &args::Metrics) -> anyhow::Result<Metrics> {
   registry.register(Box::new(
     prometheus::process_collector::ProcessCollector::for_self(),
   ))?;
@@ -344,7 +344,7 @@ impl Target {
       seq += 1;
       let seq = seq.0;
 
-      #[allow(clippy::redundant_pub_crate)]
+      #[allow(clippy::redundant_pub_crate, clippy::ignored_unit_patterns)]
       {
         tokio::select! {
           _ = interval.tick() => (),
@@ -469,7 +469,7 @@ impl Target {
     let mut interval = tokio::time::interval(*resolve_interval);
 
     loop {
-      #[allow(clippy::redundant_pub_crate)]
+      #[allow(clippy::redundant_pub_crate, clippy::ignored_unit_patterns)]
       {
         tokio::select! {
           _ = interval.tick() => (),
