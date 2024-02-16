@@ -22,6 +22,10 @@ pub struct Args {
   #[arg(short = 'r', long, default_value = "60s", value_name = "DURATION")]
   pub resolve_interval: humantime::Duration,
 
+  /// Device (or VRF) to bind the raw socket to.
+  #[arg(long, value_name = "DEVICE")]
+  pub bind_device: Option<String>,
+
   #[command(flatten)]
   pub metrics: MetricsArgs,
 

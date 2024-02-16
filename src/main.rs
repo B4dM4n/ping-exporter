@@ -11,6 +11,7 @@ use std::{
   future::Future,
   net::{IpAddr, Ipv4Addr, Ipv6Addr},
   num::Wrapping,
+  os::fd::BorrowedFd,
   pin::{pin, Pin},
   str::FromStr,
   sync::Arc,
@@ -22,6 +23,7 @@ use hickory_resolver::{
   error::{ResolveError, ResolveErrorKind},
   TokioAsyncResolver,
 };
+use nix::sys::socket::{setsockopt, sockopt};
 use prometheus::{
   register_histogram_vec_with_registry, register_int_counter_vec_with_registry, Encoder,
   HistogramVec, IntCounterVec, Registry,
@@ -46,6 +48,14 @@ async fn main() -> anyhow::Result<()> {
 
   let client_v4 = Client::new(&Config::default())?;
   let client_v6 = Client::new(&Config::builder().kind(ICMP::V6).build())?;
+
+  if let Some(device) = args.bind_device {
+    let fd_v4 = unsafe { BorrowedFd::borrow_raw(client_v4.get_socket().get_native_sock()) };
+    setsockopt(&fd_v4, sockopt::BindToDevice, &device.clone().into())?;
+
+    let fd_v6 = unsafe { BorrowedFd::borrow_raw(client_v6.get_socket().get_native_sock()) };
+    setsockopt(&fd_v6, sockopt::BindToDevice, &device.into())?;
+  }
 
   let registry = Registry::new();
   let Metrics {
