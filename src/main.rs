@@ -11,7 +11,6 @@ use std::{
   future::IntoFuture,
   io,
   net::{IpAddr, Ipv4Addr, Ipv6Addr},
-  num::Wrapping,
   os::fd::BorrowedFd,
   pin::pin,
   str::FromStr,
@@ -32,7 +31,7 @@ use prometheus::{
 use rand::{seq::IteratorRandom, thread_rng};
 use surge_ping::{Client, Config, PingIdentifier, PingSequence, Pinger, SurgeError, ICMP};
 use tokio::sync::Notify;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, trace, warn, Instrument as _};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -330,19 +329,19 @@ impl Target {
       notify_exit,
       client_v4,
       client_v6,
-      ping_duplicates,
-      ping_errors,
-      ping_rtt,
+      ..
     } = args.as_ref();
     let mut interval = tokio::time::interval(*send_interval);
 
-    let mut pinger_v4: Option<Pinger> = None;
-    let mut pinger_v6: Option<Pinger> = None;
-    let mut seq = Wrapping(0);
+    let mut seq = 0_u16;
+    let mut id = PingIdentifier(rand::random());
 
     loop {
-      seq += 1;
-      let seq = seq.0;
+      let (next_seq, overflow) = seq.overflowing_add(1);
+      seq = next_seq;
+      if overflow {
+        id = PingIdentifier(rand::random());
+      }
 
       #[allow(clippy::redundant_pub_crate, clippy::ignored_unit_patterns)]
       {
@@ -358,77 +357,84 @@ impl Target {
 
       let addresses = self.addresses.load();
       if let Some(addr) = addresses.ipv4_addr {
-        let pinger_v4 = match pinger_v4.as_mut() {
-          Some(pinger) if pinger.host == addr => pinger,
-          _ => pinger_v4
-            .insert(
-              client_v4
-                .pinger(addr.into(), PingIdentifier(rand::random()))
-                .await,
-            )
-            .timeout(*send_timeout),
-        };
+        let mut pinger = client_v4.pinger(addr.into(), id).await;
+        pinger.timeout(*send_timeout);
 
-        match self.send_ipv4(seq, addr, pinger_v4).await {
-          PingResult::Success(rtt) => {
-            ping_rtt
-              .with_label_values(&[&self.hostname, "icmp"])
-              .observe(rtt.as_secs_f64());
+        let this = self.clone();
+        let args = args.clone();
+        tokio::spawn(
+          async move {
+            match this.send_ipv4(seq, addr, pinger).await {
+              PingResult::Success(rtt) => {
+                args
+                  .ping_rtt
+                  .with_label_values(&[&this.hostname, "icmp"])
+                  .observe(rtt.as_secs_f64());
+              }
+              PingResult::Timeout => {
+                args
+                  .ping_rtt
+                  .with_label_values(&[&this.hostname, "icmp"])
+                  .observe(f64::INFINITY);
+              }
+              PingResult::Duplicate => {
+                args
+                  .ping_duplicates
+                  .with_label_values(&[&this.hostname, "icmp"])
+                  .inc();
+              }
+              PingResult::Error => args
+                .ping_errors
+                .with_label_values(&[&this.hostname, "icmp"])
+                .inc(),
+            }
           }
-          PingResult::Timeout => {
-            ping_rtt
-              .with_label_values(&[&self.hostname, "icmp"])
-              .observe(f64::INFINITY);
-          }
-          PingResult::Duplicate => {
-            ping_duplicates
-              .with_label_values(&[&self.hostname, "icmp"])
-              .inc();
-          }
-          PingResult::Error => ping_errors
-            .with_label_values(&[&self.hostname, "icmp"])
-            .inc(),
-        }
+          .in_current_span(),
+        );
       }
 
       if let Some(addr) = addresses.ipv6_addr {
-        let pinger_v6 = match pinger_v6.as_mut() {
-          Some(pinger) if pinger.host == addr => pinger,
-          _ => pinger_v6
-            .insert(
-              client_v6
-                .pinger(addr.into(), PingIdentifier(rand::random()))
-                .await,
-            )
-            .timeout(*send_timeout),
-        };
-        match self.send_ipv6(seq, addr, pinger_v6).await {
-          PingResult::Success(rtt) => {
-            ping_rtt
-              .with_label_values(&[&self.hostname, "icmp6"])
-              .observe(rtt.as_secs_f64());
+        let mut pinger = client_v6.pinger(addr.into(), id).await;
+        pinger.timeout(*send_timeout);
+
+        let this = self.clone();
+        let args = args.clone();
+        tokio::spawn(
+          async move {
+            match this.send_ipv6(seq, addr, pinger).await {
+              PingResult::Success(rtt) => {
+                args
+                  .ping_rtt
+                  .with_label_values(&[&this.hostname, "icmp6"])
+                  .observe(rtt.as_secs_f64());
+              }
+              PingResult::Timeout => {
+                args
+                  .ping_rtt
+                  .with_label_values(&[&this.hostname, "icmp6"])
+                  .observe(f64::INFINITY);
+              }
+              PingResult::Duplicate => {
+                args
+                  .ping_duplicates
+                  .with_label_values(&[&this.hostname, "icmp6"])
+                  .inc();
+              }
+              PingResult::Error => args
+                .ping_errors
+                .with_label_values(&[&this.hostname, "icmp6"])
+                .inc(),
+            }
           }
-          PingResult::Timeout => {
-            ping_rtt
-              .with_label_values(&[&self.hostname, "icmp6"])
-              .observe(f64::INFINITY);
-          }
-          PingResult::Duplicate => {
-            ping_duplicates
-              .with_label_values(&[&self.hostname, "icmp6"])
-              .inc();
-          }
-          PingResult::Error => ping_errors
-            .with_label_values(&[&self.hostname, "icmp6"])
-            .inc(),
-        }
+          .in_current_span(),
+        );
       }
     }
   }
 
-  #[tracing::instrument(level = "debug", ret, skip(self, pinger_v4))]
-  async fn send_ipv4(&self, seq: u16, addr: Ipv4Addr, pinger_v4: &mut Pinger) -> PingResult {
-    match pinger_v4.ping(PingSequence(seq), &[]).await {
+  #[tracing::instrument(level = "debug", ret, skip(self, pinger))]
+  async fn send_ipv4(&self, seq: u16, addr: Ipv4Addr, mut pinger: Pinger) -> PingResult {
+    match pinger.ping(PingSequence(seq), &[]).await {
       Ok((_packet, rtt)) => PingResult::Success(rtt),
       Err(err) => match err {
         SurgeError::Timeout { .. } => PingResult::Timeout,
@@ -439,7 +445,7 @@ impl Target {
   }
 
   #[tracing::instrument(level = "debug", ret, skip(self, pinger_v6))]
-  async fn send_ipv6(&self, seq: u16, addr: Ipv6Addr, pinger_v6: &mut Pinger) -> PingResult {
+  async fn send_ipv6(&self, seq: u16, addr: Ipv6Addr, mut pinger_v6: Pinger) -> PingResult {
     match pinger_v6.ping(PingSequence(seq), &[]).await {
       Ok((_packet, rtt)) => PingResult::Success(rtt),
       Err(err) => match err {
