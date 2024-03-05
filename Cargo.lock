@@ -1245,8 +1245,7 @@ checksum = "5ee073c9e4cd00e28217186dbe12796d692868f432bf2e97ee73bed0c56dfa01"
 [[package]]
 name = "surge-ping"
 version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "af341b2be485d647b5dc4cfb2da99efac35b5c95748a08fb7233480fedc5ead3"
+source = "git+https://github.com/B4dM4n/surge-ping?branch=fix-memory-leak#846588a4f1f6dae16e87c9cf53222fa4c8967b3d"
 dependencies = [
  "hex",
  "parking_lot",

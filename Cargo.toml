@@ -24,3 +24,6 @@ surge-ping = "0.8.0"
 tokio = { version = "1.36.0", features = ["macros", "signal", "rt-multi-thread"] }
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter", "local-time"] }
+
+[patch.crates-io]
+surge-ping = { git = 'https://github.com/B4dM4n/surge-ping', branch = "fix-memory-leak" }
