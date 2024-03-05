@@ -137,14 +137,23 @@ async fn main() -> anyhow::Result<()> {
 }
 
 fn setup_tracing() -> anyhow::Result<()> {
-  tracing_subscriber::fmt()
-    .with_env_filter(
-      tracing_subscriber::EnvFilter::builder()
-        .with_default_directive(tracing_subscriber::filter::LevelFilter::INFO.into())
-        .from_env_lossy(),
+  use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _, Layer as _};
+
+  #[cfg(feature = "tokio-tracing")]
+  let with_console_subscriber =
+    |registry: tracing_subscriber::registry::Registry| registry.with(console_subscriber::spawn());
+  #[cfg(not(feature = "tokio-tracing"))]
+  let with_console_subscriber = |registry| registry;
+
+  with_console_subscriber(tracing_subscriber::registry())
+    .with(
+      tracing_subscriber::fmt::layer().with_filter(
+        tracing_subscriber::EnvFilter::builder()
+          .with_default_directive(tracing_subscriber::filter::LevelFilter::INFO.into())
+          .from_env_lossy(),
+      ),
     )
-    .try_init()
-    .map_err(|e| anyhow::anyhow!(e))?;
+    .try_init()?;
 
   Ok(())
 }

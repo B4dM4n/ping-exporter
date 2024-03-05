@@ -14,6 +14,7 @@ anyhow = "1.0.79"
 arc-swap = "1.6.0"
 axum = { version = "0.7.4", features = ["tracing"] }
 clap = { version = "4.5.0", features = ["derive"] }
+console-subscriber = { version = "0.2.0", optional = true }
 futures-util = { version = "0.3.30", default-features = false }
 hickory-resolver = { version = "0.24.0", features = ["tokio"] }
 humantime = "2.1.0"
@@ -24,6 +25,10 @@ surge-ping = "0.8.0"
 tokio = { version = "1.36.0", features = ["macros", "signal", "rt-multi-thread"] }
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter", "local-time"] }
+
+[features]
+default = []
+tokio-tracing = ["console-subscriber", "tokio/tracing"]
 
 [patch.crates-io]
 surge-ping = { git = 'https://github.com/B4dM4n/surge-ping', branch = "fix-memory-leak" }
