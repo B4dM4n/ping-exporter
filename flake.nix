@@ -29,7 +29,6 @@
         buildInputs = with pkgs; [
           cargo
           clippy
-          rust-analyzer
           rustc
           rustfmt-nightly
         ];
