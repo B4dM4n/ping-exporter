@@ -143,6 +143,7 @@ fn setup_tracing() -> anyhow::Result<()> {
         .with_default_directive(tracing_subscriber::filter::LevelFilter::INFO.into())
         .from_env_lossy(),
     )
+    .with_timer(tracing_subscriber::fmt::time::ChronoLocal::rfc_3339())
     .try_init()
     .map_err(|e| anyhow::anyhow!(e))?;
 
