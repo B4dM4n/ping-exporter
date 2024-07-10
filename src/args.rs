@@ -26,10 +26,23 @@ pub struct Args {
   #[arg(long, value_name = "DEVICE")]
   pub bind_device: Option<String>,
 
+  /// Enable dynamically added targets via the `targets` query parameter.
+  #[arg(long = "dynamic-targets")]
+  pub dynamic_targets: bool,
+
+  /// How long to keep dynamically added targets after they are last specified.
+  #[arg(long, default_value = "60s", value_name = "DURATION")]
+  pub dynamic_targets_hold: humantime::Duration,
+
+  /// The maximum number of targets (permanent + dynamic). New targets over this
+  /// limit are ignored.
+  #[arg(long, default_value_t = 100, value_name = "COUNT")]
+  pub targets_max: usize,
+
   #[command(flatten)]
   pub metrics: Metrics,
 
-  ///Path under which to expose metrics
+  /// Path under which to expose metrics
   #[arg(
     long = "web.telemetry-path",
     default_value = "/metrics",
@@ -101,11 +114,10 @@ fn greater<T: Clone + Display + PartialOrd + Send + Sync + 'static>(
   }
 }
 
-fn greater_deref<T: Clone + Display + Send + Sync + 'static>(
+fn greater_deref<T: Clone + Display + Deref + Send + Sync + 'static>(
   check: T,
 ) -> impl Fn(T) -> Result<T, String> + Clone + Send + Sync + 'static
 where
-  T: Deref,
   <T as Deref>::Target: PartialOrd,
 {
   move |value| {
