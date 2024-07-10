@@ -244,7 +244,14 @@ async fn metrics_get(
 ) -> Response {
   if let Some((dynamic_targets, new_targets)) = dynamic_targets.zip(args.0.targets) {
     dynamic_targets
-      .add(new_targets.split(',').map(ToOwned::to_owned), false)
+      .add(
+        new_targets
+          .split(',')
+          .map(str::trim)
+          .filter(|s| !s.is_empty())
+          .map(ToOwned::to_owned),
+        false,
+      )
       .await;
   }
 
