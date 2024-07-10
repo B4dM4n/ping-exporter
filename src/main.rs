@@ -516,7 +516,7 @@ impl Target {
     }
   }
 
-  #[tracing::instrument(level = "debug", ret, skip(self, args), fields(hostname = self.hostname))]
+  #[tracing::instrument(ret(level = Level::DEBUG), skip(self, args), fields(hostname = self.hostname))]
   async fn send_loop(self: Arc<Self>, args: Arc<TargetSendArgs>) {
     let TargetSendArgs {
       send_interval,
@@ -638,7 +638,7 @@ impl Target {
     let _ = args.ping_errors.remove_label_values(values6);
   }
 
-  #[tracing::instrument(level = "debug", ret, skip(self, pinger))]
+  #[tracing::instrument(ret(level = Level::DEBUG), skip(self, pinger))]
   async fn send_ipv4(&self, seq: u16, addr: Ipv4Addr, mut pinger: Pinger) -> PingResult {
     match pinger.ping(PingSequence(seq), &[]).await {
       Ok((_packet, rtt)) => PingResult::Success(rtt),
@@ -650,7 +650,7 @@ impl Target {
     }
   }
 
-  #[tracing::instrument(level = "debug", ret, skip(self, pinger_v6))]
+  #[tracing::instrument(ret(level = Level::DEBUG), skip(self, pinger_v6))]
   async fn send_ipv6(&self, seq: u16, addr: Ipv6Addr, mut pinger_v6: Pinger) -> PingResult {
     match pinger_v6.ping(PingSequence(seq), &[]).await {
       Ok((_packet, rtt)) => PingResult::Success(rtt),
@@ -662,7 +662,7 @@ impl Target {
     }
   }
 
-  #[tracing::instrument(level = "debug", ret, skip(self, args), fields(hostname = self.hostname))]
+  #[tracing::instrument(ret(level = Level::DEBUG), skip(self, args), fields(hostname = self.hostname))]
   async fn resolve_loop(self: Arc<Self>, args: Arc<TargetResolveArgs>) {
     {
       let addresses = self.addresses.load();
@@ -721,7 +721,7 @@ impl Target {
     }
   }
 
-  #[tracing::instrument(level = "debug", ret, skip(self, resolver))]
+  #[tracing::instrument(ret(level = Level::DEBUG), err(level = Level::INFO), skip(self, resolver))]
   async fn resolve_ipv4(
     &self,
     resolver: &TokioAsyncResolver,
@@ -733,7 +733,7 @@ impl Target {
     }
   }
 
-  #[tracing::instrument(level = "debug", ret, skip(self, resolver))]
+  #[tracing::instrument(ret(level = Level::DEBUG), err(level = Level::INFO), skip(self, resolver))]
   async fn resolve_ipv6(
     &self,
     resolver: &TokioAsyncResolver,
