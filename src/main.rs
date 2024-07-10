@@ -9,6 +9,7 @@ mod args;
 
 use std::{
   collections::{hash_map::Entry, HashMap},
+  fmt,
   future::IntoFuture,
   io,
   net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
@@ -305,7 +306,7 @@ async fn metrics_app(
             "request",
             %client,
             method = %request.method(),
-            uri = %request.uri(),
+            uri = %MaxWidth(60, request.uri()),
             version = ?request.version(),
         )
       }),
@@ -750,5 +751,28 @@ impl Target {
       Err(e) if matches!(e.kind(), ResolveErrorKind::NoRecordsFound { .. }) => Ok(None),
       Err(e) => Err(e),
     }
+  }
+}
+
+struct MaxWidth<T>(usize, T);
+
+impl<T: fmt::Display> fmt::Display for MaxWidth<T> {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn truncate(s: &str, max_bytes: usize) -> &str {
+      if let Some((idx, _)) = s.char_indices().take_while(|(i, _)| *i < max_bytes).last() {
+        &s[..idx]
+      } else {
+        s
+      }
+    }
+
+    let mut s: String = format!("{}", self.1);
+    let trunc = truncate(&s, self.0);
+    if trunc.len() < s.len() {
+      s.truncate(trunc.len());
+      s.push('…');
+    }
+
+    f.write_str(&s)
   }
 }
