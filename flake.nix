@@ -20,11 +20,18 @@
         extensions = ["rust-src"];
         targets = ["x86_64-unknown-linux-musl"];
       };
+
+      rustNightly = pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default);
+
+      rustfmtNightly = pkgs.writeShellScriptBin "rustfmt" ''
+        exec ${rustNightly}/bin/rustfmt "$@"
+      '';
     in {
       devShell = pkgs.mkShell {
         preferLocalBuild = true;
 
         buildInputs = with pkgs; [
+          rustfmtNightly
           rustStable
         ];
       };
