@@ -73,6 +73,7 @@ async fn main() -> anyhow::Result<()> {
     ping_duplicates,
     ping_errors,
     ping_rtt,
+    ping_timeouts,
     ping_resolve_errors,
     send_timeout,
   } = setup_metrics(&registry, &args.metrics)?;
@@ -86,6 +87,7 @@ async fn main() -> anyhow::Result<()> {
     ping_duplicates,
     ping_errors,
     ping_rtt,
+    ping_timeouts,
   });
   let target_resolve_args = Arc::new(TargetResolveArgs {
     resolve_interval: args.resolve_interval.into(),
@@ -174,6 +176,7 @@ struct Metrics {
   ping_duplicates: IntCounterVec,
   ping_errors: IntCounterVec,
   ping_rtt: HistogramVec,
+  ping_timeouts: IntCounterVec,
   ping_resolve_errors: IntCounterVec,
   send_timeout: Duration,
 }
@@ -203,6 +206,12 @@ fn setup_metrics(registry: &Registry, args: &args::Metrics) -> anyhow::Result<Me
     rtt_buckets,
     registry
   )?;
+  let ping_timeouts = prometheus::register_int_counter_vec_with_registry!(
+    "ping_timeouts",
+    "Number of packets for which no answer was received in the maxium bucket time",
+    &["target", "version"],
+    registry
+  )?;
   let ping_errors = prometheus::register_int_counter_vec_with_registry!(
     "ping_errors",
     "Number of packets failed to send or receive due to errors",
@@ -228,6 +237,7 @@ fn setup_metrics(registry: &Registry, args: &args::Metrics) -> anyhow::Result<Me
     ping_duplicates,
     ping_errors,
     ping_rtt,
+    ping_timeouts,
     ping_resolve_errors,
     send_timeout,
   })
@@ -470,6 +480,7 @@ struct TargetSendArgs {
   ping_duplicates: IntCounterVec,
   ping_errors: IntCounterVec,
   ping_rtt: HistogramVec,
+  ping_timeouts: IntCounterVec,
 }
 
 struct TargetResolveArgs {
@@ -578,6 +589,10 @@ impl Target {
                   .ping_rtt
                   .with_label_values(&[&this.hostname, "icmp"])
                   .observe(f64::INFINITY);
+                args
+                  .ping_timeouts
+                  .with_label_values(&[&this.hostname, "icmp"])
+                  .inc();
               }
               PingResult::Duplicate => {
                 args
@@ -615,6 +630,10 @@ impl Target {
                   .ping_rtt
                   .with_label_values(&[&this.hostname, "icmp6"])
                   .observe(f64::INFINITY);
+                args
+                  .ping_timeouts
+                  .with_label_values(&[&this.hostname, "icmp6"])
+                  .inc();
               }
               PingResult::Duplicate => {
                 args
