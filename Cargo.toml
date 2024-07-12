@@ -13,14 +13,17 @@ version = "0.3.3"
 anyhow = "1.0.86"
 arc-swap = "1.7.1"
 axum = { version = "0.7.5", features = ["tracing"] }
+base64 = "0.22.1"
 clap = { version = "4.5.9", features = ["derive"] }
 futures-util = { version = "0.3.30", default-features = false }
 hickory-resolver = { version = "0.24.1", features = ["tokio"] }
 humantime = "2.1.0"
 nix = { version = "0.27.1", features = ["socket"] }
+password-auth = "1.0.0"
 prometheus = { version = "0.13.4", default-features = false, features = ["process"] }
 rand = "0.8.5"
 serde = { version = "1.0.204", features = ["derive"] }
+serde_yml = "0.0.10"
 surge-ping = "0.8.1"
 tokio = { version = "1.38.0", features = ["macros", "signal", "rt-multi-thread"] }
 tokio-util = "0.7.11"

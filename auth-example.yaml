@@ -1,0 +1,9 @@
+basic:
+  user1: $plain$password_in_plaintext
+  # 1234asdf
+  user2: $argon2id$v=19$m=19456,t=2,p=1$QWRyZHMxa2d3dU9FbXNIOQ$hBS2m5AHjkTmXTFDg/nmqg
+  user3: $argon2d$v=19$m=19456,t=2,p=1$T1lIRkh0b2VSYW5GR21sag$1WW8f/QS78P/9dxr+bFOtw
+  user4: $argon2i$v=19$m=19456,t=2,p=1$YmVtZXhYMGhSYjloc0tXZw$bsDMXyatsAwugb9B5kxRNA
+
+bearer:
+  - token-9a0c5c67-7569-486b-99f6-b532159763f7

@@ -6,6 +6,7 @@
 )]
 
 mod args;
+mod util;
 
 use std::{
   collections::{hash_map::Entry, HashMap},
@@ -21,6 +22,7 @@ use std::{
 };
 
 use arc_swap::ArcSwap;
+use args::AuthCredentials;
 use axum::{
   extract::{ConnectInfo, Query},
   http::{header, Request, StatusCode},
@@ -31,6 +33,7 @@ use hickory_resolver::{
   TokioAsyncResolver,
 };
 use nix::sys::socket::{setsockopt, sockopt};
+use password_auth::VerifyError;
 use prometheus::{Encoder, HistogramVec, IntCounterVec, IntGauge, Registry};
 use rand::{seq::IteratorRandom, thread_rng};
 use serde::Deserialize;
@@ -39,6 +42,7 @@ use tokio::{sync::Mutex, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 use tower_http::trace::TraceLayer;
 use tracing::{debug, error, info, trace, warn, Instrument as _, Level};
+use util::{Auth, AuthRejection};
 
 const SECOND: Duration = Duration::from_secs(1);
 
@@ -107,13 +111,13 @@ async fn main() -> anyhow::Result<()> {
   targets.add(args.targets, true).await;
   tokio::spawn(targets.clone().cleanup_task());
 
+  let app = Arc::new(App::new(
+    registry,
+    args.dynamic_targets.then(|| targets.clone()),
+    args.auth_credentials,
+  ));
   {
-    let mut app = pin!(metrics_app(
-      args.web_telemetry_path,
-      args.web_listen_address,
-      registry,
-      args.dynamic_targets.then(|| { targets.clone() }),
-    ));
+    let mut app = pin!(app.run(args.web_telemetry_path, args.web_listen_address,));
     let mut ctrl_c = pin!(tokio::signal::ctrl_c());
 
     debug!("Waiting for Ctrl-C");
@@ -243,109 +247,155 @@ fn setup_metrics(registry: &Registry, args: &args::Metrics) -> anyhow::Result<Me
   })
 }
 
+struct App {
+  registry: Registry,
+  dynamic_targets: Option<Arc<TargetMap>>,
+  auth_credentials: Option<AuthCredentials>,
+}
+
+impl App {
+  const fn new(
+    registry: Registry,
+    dynamic_targets: Option<Arc<TargetMap>>,
+    auth_credentials: Option<AuthCredentials>,
+  ) -> Self {
+    Self {
+      registry,
+      dynamic_targets,
+      auth_credentials,
+    }
+  }
+
+  #[tracing::instrument(ret, err, skip(self))]
+  async fn run(
+    self: Arc<Self>,
+    mut web_telemetry_path: String,
+    web_listen_addresses: Vec<String>,
+  ) -> anyhow::Result<()> {
+    use axum::{routing::get, Router};
+
+    if !web_telemetry_path.starts_with('/') {
+      web_telemetry_path.insert(0, '/');
+    }
+
+    let mut router = Router::new();
+    if web_telemetry_path != "/" {
+      router = router.route("/", get(|| async { "" }));
+    }
+
+    let app = router
+      .route(
+        &web_telemetry_path,
+        get({
+          let this = self.clone();
+          move |args, auth| this.metrics_get(args, auth)
+        }),
+      )
+      .layer(
+        TraceLayer::new_for_http().make_span_with(|request: &Request<_>| {
+          let client = request
+            .extensions()
+            .get::<ConnectInfo<SocketAddr>>()
+            .map_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED), |ConnectInfo(addr)| {
+              addr.ip()
+            });
+          tracing::span!(
+              Level::INFO,
+              "request",
+              %client,
+              method = %request.method(),
+              uri = %MaxWidth(60, request.uri()),
+              version = ?request.version(),
+          )
+        }),
+      );
+
+    let listeners = futures_util::future::join_all(
+      web_listen_addresses
+        .into_iter()
+        .map(tokio::net::TcpListener::bind),
+    )
+    .await
+    .into_iter()
+    .collect::<Result<Vec<_>, io::Error>>()?;
+
+    // poll all futures and return the result of the first completed one, which
+    // might be an error
+    futures_util::future::select_all(listeners.into_iter().map(|listener| {
+      axum::serve(
+        listener,
+        app
+          .clone()
+          .into_make_service_with_connect_info::<SocketAddr>(),
+      )
+      .into_future()
+    }))
+    .await
+    .0?;
+
+    Ok(())
+  }
+
+  async fn metrics_get(
+    self: Arc<Self>,
+    args: Query<MetricsGetArgs>,
+    auth: Result<Auth, AuthRejection>,
+  ) -> Response {
+    if let Some(auth_credentials) = self.auth_credentials.as_ref() {
+      match auth {
+        Ok(Auth::Basic(basic)) => {
+          let Some(hash) = auth_credentials.basic.get(&basic.0) else {
+            return (
+              StatusCode::UNAUTHORIZED,
+              VerifyError::PasswordInvalid.to_string(),
+            )
+              .into_response();
+          };
+
+          if let Err(e) = util::verify_password(basic.1.as_deref().unwrap_or_default(), hash) {
+            return (StatusCode::UNAUTHORIZED, e.to_string()).into_response();
+          }
+        }
+
+        Ok(Auth::Bearer(bearer)) => {
+          if !auth_credentials.bearer.contains(&bearer.0) {
+            return (StatusCode::UNAUTHORIZED, "Invalid access token").into_response();
+          };
+        }
+
+        Err(e) => return e.into_response(),
+      }
+    }
+
+    if let Some((dynamic_targets, new_targets)) = self.dynamic_targets.as_ref().zip(args.0.targets)
+    {
+      dynamic_targets
+        .add(
+          new_targets
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(ToOwned::to_owned),
+          false,
+        )
+        .await;
+    }
+
+    // TODO: support prometheus::ProtobufEncoder
+    let mut buffer = Vec::with_capacity(4096);
+    let encoder = prometheus::TextEncoder::new();
+    let metric_families = self.registry.gather();
+    if let Err(err) = encoder.encode(&metric_families, &mut buffer) {
+      return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response();
+    }
+
+    ([(header::CONTENT_TYPE, prometheus::TEXT_FORMAT)], buffer).into_response()
+  }
+}
+
 #[derive(Debug, Deserialize)]
 struct MetricsGetArgs {
   targets: Option<String>,
-}
-
-async fn metrics_get(
-  registry: &Registry,
-  dynamic_targets: Option<&TargetMap>,
-  args: Query<MetricsGetArgs>,
-) -> Response {
-  if let Some((dynamic_targets, new_targets)) = dynamic_targets.zip(args.0.targets) {
-    dynamic_targets
-      .add(
-        new_targets
-          .split(',')
-          .map(str::trim)
-          .filter(|s| !s.is_empty())
-          .map(ToOwned::to_owned),
-        false,
-      )
-      .await;
-  }
-
-  // TODO: support prometheus::ProtobufEncoder
-  let mut buffer = Vec::with_capacity(4096);
-  let encoder = prometheus::TextEncoder::new();
-  let metric_families = registry.gather();
-  if let Err(err) = encoder.encode(&metric_families, &mut buffer) {
-    return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response();
-  }
-
-  ([(header::CONTENT_TYPE, prometheus::TEXT_FORMAT)], buffer).into_response()
-}
-
-#[tracing::instrument(ret, err, skip(registry, dynamic_targets))]
-async fn metrics_app(
-  mut web_telemetry_path: String,
-  web_listen_addresses: Vec<String>,
-  registry: Registry,
-  dynamic_targets: Option<Arc<TargetMap>>,
-) -> anyhow::Result<()> {
-  use axum::{routing::get, Router};
-
-  if !web_telemetry_path.starts_with('/') {
-    web_telemetry_path.insert(0, '/');
-  }
-
-  let mut router = Router::new();
-  if web_telemetry_path != "/" {
-    router = router.route("/", get(|| async { "" }));
-  }
-
-  let app = router
-    .route(
-      &web_telemetry_path,
-      get({
-        let dynamic_targets = dynamic_targets.clone();
-        |args| async move { metrics_get(&registry, dynamic_targets.as_deref(), args).await }
-      }),
-    )
-    .layer(
-      TraceLayer::new_for_http().make_span_with(|request: &Request<_>| {
-        let client = request
-          .extensions()
-          .get::<ConnectInfo<SocketAddr>>()
-          .map_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED), |ConnectInfo(addr)| {
-            addr.ip()
-          });
-        tracing::span!(
-            Level::INFO,
-            "request",
-            %client,
-            method = %request.method(),
-            uri = %MaxWidth(60, request.uri()),
-            version = ?request.version(),
-        )
-      }),
-    );
-
-  let listeners = futures_util::future::join_all(
-    web_listen_addresses
-      .into_iter()
-      .map(tokio::net::TcpListener::bind),
-  )
-  .await
-  .into_iter()
-  .collect::<Result<Vec<_>, io::Error>>()?;
-
-  // poll all futures and return the result of the first completed one, which
-  // might be an error
-  futures_util::future::select_all(listeners.into_iter().map(|listener| {
-    axum::serve(
-      listener,
-      app
-        .clone()
-        .into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .into_future()
-  }))
-  .await
-  .0?;
-
-  Ok(())
 }
 
 struct TargetMap {

@@ -1,6 +1,16 @@
-use std::{fmt::Display, ops::Deref, str::FromStr, time::Duration};
+use std::{
+  collections::{HashMap, HashSet},
+  fmt::Display,
+  fs::File,
+  io::{Error as IoError, ErrorKind as IoErrorKind, Result as IoResult},
+  ops::Deref,
+  path::Path,
+  str::FromStr,
+  time::Duration,
+};
 
-use clap::builder::TypedValueParser;
+use clap::builder::{PathBufValueParser, TypedValueParser as _, ValueParser};
+use serde::Deserialize;
 
 /// Prometheus exporter reporting ping statistics
 #[derive(Debug, clap::Parser)]
@@ -57,6 +67,13 @@ pub struct Args {
     value_name = "ADDRESS"
   )]
   pub web_listen_address: Vec<String>,
+
+  /// YAML file containing authentication credentials.
+  ///
+  /// When specified (even if empty), only metrics requests with one of the
+  /// contained credentials are accepted. asdgghqas qweq wqwqewt
+  #[arg(long, value_name = "PATH", value_parser = AuthCredentials::path_value_parser())]
+  pub auth_credentials: Option<AuthCredentials>,
 }
 
 #[derive(Debug, clap::Args)]
@@ -126,5 +143,28 @@ where
     } else {
       Err(format!("must be greater than {check}"))
     }
+  }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AuthCredentials {
+  #[serde(default)]
+  pub basic: HashMap<String, String>,
+
+  #[serde(default)]
+  pub bearer: HashSet<String>,
+}
+
+impl AuthCredentials {
+  fn from_path(path: impl AsRef<Path>) -> IoResult<Self> {
+    Self::from_file(&mut File::open(path)?)
+  }
+
+  fn from_file(file: &mut File) -> IoResult<Self> {
+    serde_yml::from_reader(file).map_err(|e| IoError::new(IoErrorKind::Other, e))
+  }
+
+  fn path_value_parser() -> ValueParser {
+    ValueParser::new(PathBufValueParser::new().try_map(Self::from_path))
   }
 }
