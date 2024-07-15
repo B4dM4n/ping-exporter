@@ -14,13 +14,14 @@ use std::{
   future::IntoFuture,
   io,
   net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
-  os::fd::BorrowedFd,
+  os::fd::{BorrowedFd, FromRawFd as _},
   pin::pin,
   str::FromStr,
   sync::Arc,
   time::{Duration, Instant},
 };
 
+use anyhow::bail;
 use arc_swap::ArcSwap;
 use args::AuthCredentials;
 use axum::{
@@ -41,7 +42,7 @@ use surge_ping::{Client, Config, PingIdentifier, PingSequence, Pinger, SurgeErro
 use tokio::{sync::Mutex, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 use tower_http::trace::TraceLayer;
-use tracing::{debug, error, info, trace, warn, Instrument as _, Level};
+use tracing::{debug, info, trace, warn, Instrument as _, Level};
 use util::{Auth, AuthRejection};
 
 const SECOND: Duration = Duration::from_secs(1);
@@ -117,18 +118,18 @@ async fn main() -> anyhow::Result<()> {
     args.auth_credentials,
   ));
   {
-    let mut app = pin!(app.run(args.web_telemetry_path, args.web_listen_address,));
+    let mut app = pin!(app.run(
+      args.web_telemetry_path,
+      args.web_listen_address,
+      args.web_systemd_socket
+    ));
     let mut ctrl_c = pin!(tokio::signal::ctrl_c());
 
     debug!("Waiting for Ctrl-C");
     #[allow(clippy::redundant_pub_crate)]
     {
       tokio::select! {
-        ret = &mut app => {
-          if let Err(e) = ret {
-            error!("Webserver failed: {:?}", e);
-          }
-        }
+        _ = &mut app => {}
         _ = &mut ctrl_c => {
           debug!("Ctrl-C received");
         }
@@ -271,6 +272,7 @@ impl App {
     self: Arc<Self>,
     mut web_telemetry_path: String,
     web_listen_addresses: Vec<String>,
+    web_systemd_socket: bool,
   ) -> anyhow::Result<()> {
     use axum::{routing::get, Router};
 
@@ -310,14 +312,33 @@ impl App {
         }),
       );
 
-    let listeners = futures_util::future::join_all(
-      web_listen_addresses
-        .into_iter()
-        .map(tokio::net::TcpListener::bind),
-    )
-    .await
-    .into_iter()
-    .collect::<Result<Vec<_>, io::Error>>()?;
+    let listeners = if web_systemd_socket {
+      sd_notify::listen_fds()?
+        .map(|fd| unsafe { std::net::TcpListener::from_raw_fd(fd) })
+        .map(tokio::net::TcpListener::from_std)
+        .collect::<Result<Vec<_>, io::Error>>()?
+    } else {
+      futures_util::future::join_all(
+        web_listen_addresses
+          .into_iter()
+          .map(tokio::net::TcpListener::bind),
+      )
+      .await
+      .into_iter()
+      .collect::<Result<Vec<_>, io::Error>>()?
+    };
+    if listeners.is_empty() {
+      bail!(
+        "No listening socket configured{}",
+        if web_systemd_socket {
+          ". Systemd service was not activated by a socket unit"
+        } else {
+          ""
+        }
+      );
+    }
+
+    sd_notify::notify(false, &[sd_notify::NotifyState::Ready])?;
 
     // poll all futures and return the result of the first completed one, which
     // might be an error

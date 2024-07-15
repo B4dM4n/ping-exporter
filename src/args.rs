@@ -68,6 +68,10 @@ pub struct Args {
   )]
   pub web_listen_address: Vec<String>,
 
+  /// Listen on systemd provided sockets instead.
+  #[arg(long = "web.systemd-socket")]
+  pub web_systemd_socket: bool,
+
   /// YAML file containing authentication credentials.
   ///
   /// When specified (even if empty), only metrics requests with one of the

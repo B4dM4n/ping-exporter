@@ -22,6 +22,7 @@ nix = { version = "0.27.1", features = ["socket"] }
 password-auth = "1.0.0"
 prometheus = { version = "0.13.4", default-features = false, features = ["process"] }
 rand = "0.8.5"
+sd-notify = "0.4.2"
 serde = { version = "1.0.204", features = ["derive"] }
 serde_yml = "0.0.10"
 surge-ping = "0.8.1"
