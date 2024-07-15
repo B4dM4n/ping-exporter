@@ -39,10 +39,10 @@ use prometheus::{Encoder, HistogramVec, IntCounterVec, IntGauge, Registry};
 use rand::{seq::IteratorRandom, thread_rng};
 use serde::Deserialize;
 use surge_ping::{Client, Config, PingIdentifier, PingSequence, Pinger, SurgeError, ICMP};
-use tokio::{sync::Mutex, task::JoinHandle};
+use tokio::{sync::Mutex, task::JoinHandle, time::timeout};
 use tokio_util::sync::CancellationToken;
 use tower_http::trace::TraceLayer;
-use tracing::{debug, info, trace, warn, Instrument as _, Level};
+use tracing::{debug, error, info, trace, warn, Instrument as _, Level};
 use util::{Auth, AuthRejection};
 
 const SECOND: Duration = Duration::from_secs(1);
@@ -117,29 +117,25 @@ async fn main() -> anyhow::Result<()> {
     args.dynamic_targets.then(|| targets.clone()),
     args.auth_credentials,
   ));
+  let mut app = pin!(app.run(
+    cancellation.child_token(),
+    args.web_telemetry_path,
+    args.web_listen_address,
+    args.web_systemd_socket
+  ));
+  let mut shutdown_signal = pin!(shutdown_signal());
+
+  debug!("Waiting for shutdown signal");
+  #[allow(clippy::redundant_pub_crate)]
   {
-    let mut app = pin!(app.run(
-      args.web_telemetry_path,
-      args.web_listen_address,
-      args.web_systemd_socket
-    ));
-    let mut ctrl_c = pin!(tokio::signal::ctrl_c());
-
-    debug!("Waiting for Ctrl-C");
-    #[allow(clippy::redundant_pub_crate)]
-    {
-      tokio::select! {
-        _ = &mut app => {}
-        _ = &mut ctrl_c => {
-          debug!("Ctrl-C received");
-        }
-      };
-    }
-
-    // drop app to shutdown the metrics server
+    tokio::select! {
+      _ = &mut app => {}
+      () = &mut shutdown_signal => {}
+    };
   }
 
   cancellation.cancel();
+  let _ = app.await;
   let targets = std::mem::take(&mut *targets.targets.lock().await);
   for (
     hostname,
@@ -173,6 +169,35 @@ fn setup_tracing() -> anyhow::Result<()> {
     .map_err(|e| anyhow::anyhow!(e))?;
 
   Ok(())
+}
+
+async fn shutdown_signal() {
+  use tokio::signal;
+
+  let ctrl_c = async {
+    signal::ctrl_c()
+      .await
+      .expect("failed to install Ctrl+C handler");
+  };
+
+  #[cfg(unix)]
+  let terminate = async {
+    signal::unix::signal(signal::unix::SignalKind::terminate())
+      .expect("failed to install signal handler")
+      .recv()
+      .await;
+  };
+
+  #[cfg(not(unix))]
+  let terminate = std::future::pending::<()>();
+
+  #[allow(clippy::redundant_pub_crate)]
+  {
+    tokio::select! {
+      () = ctrl_c => {debug!("Ctrl-C received");},
+      () = terminate => {debug!("SIGTERM received");},
+    }
+  }
 }
 
 struct Metrics {
@@ -267,9 +292,10 @@ impl App {
     }
   }
 
-  #[tracing::instrument(ret, err, skip(self))]
+  #[tracing::instrument(ret, err, skip(self, cancellation))]
   async fn run(
     self: Arc<Self>,
+    cancellation: CancellationToken,
     mut web_telemetry_path: String,
     web_listen_addresses: Vec<String>,
     web_systemd_socket: bool,
@@ -285,7 +311,7 @@ impl App {
       router = router.route("/", get(|| async { "" }));
     }
 
-    let app = router
+    let router = router
       .route(
         &web_telemetry_path,
         get({
@@ -340,21 +366,42 @@ impl App {
 
     sd_notify::notify(false, &[sd_notify::NotifyState::Ready])?;
 
-    // poll all futures and return the result of the first completed one, which
-    // might be an error
-    futures_util::future::select_all(listeners.into_iter().map(|listener| {
-      axum::serve(
-        listener,
-        app
-          .clone()
-          .into_make_service_with_connect_info::<SocketAddr>(),
-      )
-      .into_future()
-    }))
-    .await
-    .0?;
+    let handles = listeners
+      .into_iter()
+      .map(|listener| {
+        let app = router.clone();
+        let cancellation = cancellation.clone();
 
-    Ok(())
+        tokio::spawn(
+          async move {
+            axum::serve(
+              listener,
+              app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(async move { cancellation.cancelled().await })
+            .into_future()
+            .await
+          }
+          .in_current_span(),
+        )
+      })
+      .collect::<Vec<_>>();
+
+    // Wait for the first task to finish
+    let (res, _idx, handles) = futures_util::future::select_all(handles).await;
+    // Cancel all other listener tasks and wait for them to complete
+    cancellation.cancel();
+    if let Err(_e) = timeout(
+      Duration::from_secs(5),
+      futures_util::future::join_all(handles),
+    )
+    .await
+    {
+      error!("Timeout while waiting for all lsitener tasks to finish");
+    };
+
+    // Return the potential error of the first finished task
+    Ok(res??)
   }
 
   async fn metrics_get(
