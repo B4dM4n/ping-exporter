@@ -449,7 +449,6 @@ impl App {
         .await;
     }
 
-    // TODO: support prometheus::ProtobufEncoder
     let mut buffer = Vec::with_capacity(4096);
     let encoder = prometheus::TextEncoder::new();
     let metric_families = self.registry.gather();
