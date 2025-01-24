@@ -12,7 +12,7 @@ version = "0.3.4"
 [dependencies]
 anyhow = "1.0.95"
 arc-swap = "1.7.1"
-axum = { version = "0.7.9", features = ["tracing"] }
+axum = { version = "0.8.1", features = ["tracing"] }
 base64 = "0.22.1"
 clap = { version = "4.5.27", features = ["derive"] }
 futures-util = { version = "0.3.31", default-features = false }

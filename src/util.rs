@@ -1,5 +1,4 @@
 use axum::{
-  async_trait,
   extract::FromRequestParts,
   http::{header, request::Parts, StatusCode},
   response::{IntoResponse, Response},
@@ -46,7 +45,6 @@ impl AuthBasic {
   }
 }
 
-#[async_trait]
 impl<B> FromRequestParts<B> for AuthBasic
 where
   B: Send + Sync,
@@ -97,7 +95,6 @@ impl AuthBearer {
   }
 }
 
-#[async_trait]
 impl<B> FromRequestParts<B> for AuthBearer
 where
   B: Send + Sync,
@@ -168,7 +165,6 @@ impl From<AuthBearerRejection> for AuthRejection {
   }
 }
 
-#[async_trait]
 impl<B> FromRequestParts<B> for Auth
 where
   B: Send + Sync,
