@@ -29,14 +29,11 @@ use axum::{
   http::{header, Request, StatusCode},
   response::{IntoResponse as _, Response},
 };
-use hickory_resolver::{
-  error::{ResolveError, ResolveErrorKind},
-  TokioAsyncResolver,
-};
+use hickory_resolver::{proto::ProtoErrorKind, ResolveError, ResolveErrorKind, TokioResolver};
 use nix::sys::socket::{setsockopt, sockopt};
 use password_auth::VerifyError;
 use prometheus::{Encoder, HistogramVec, IntCounterVec, IntGauge, Registry};
-use rand::{seq::IteratorRandom, thread_rng};
+use rand::{rng, seq::IteratorRandom};
 use serde::Deserialize;
 use surge_ping::{Client, Config, PingIdentifier, PingSequence, Pinger, SurgeError, ICMP};
 use tokio::{sync::Mutex, task::JoinHandle, time::timeout};
@@ -58,7 +55,7 @@ async fn main() -> anyhow::Result<()> {
     return Ok(());
   }
 
-  let resolver = TokioAsyncResolver::tokio_from_system_conf()?;
+  let resolver = TokioResolver::builder_tokio()?.build();
 
   let client_v4 = Client::new(&Config::default())?;
   let client_v6 = Client::new(&Config::builder().kind(ICMP::V6).build())?;
@@ -602,7 +599,7 @@ struct TargetSendArgs {
 
 struct TargetResolveArgs {
   resolve_interval: Duration,
-  resolver: TokioAsyncResolver,
+  resolver: TokioResolver,
   ping_resolve_errors: IntCounterVec,
 }
 
@@ -866,26 +863,30 @@ impl Target {
   }
 
   #[tracing::instrument(ret(level = Level::DEBUG), err(level = Level::INFO), skip(self, resolver))]
-  async fn resolve_ipv4(
-    &self,
-    resolver: &TokioAsyncResolver,
-  ) -> Result<Option<Ipv4Addr>, ResolveError> {
+  async fn resolve_ipv4(&self, resolver: &TokioResolver) -> Result<Option<Ipv4Addr>, ResolveError> {
     match resolver.ipv4_lookup(&self.hostname).await {
-      Ok(resp) => Ok(resp.into_iter().choose(&mut thread_rng()).map(Into::into)),
-      Err(e) if matches!(e.kind(), ResolveErrorKind::NoRecordsFound { .. }) => Ok(None),
-      Err(e) => Err(e),
+      Ok(resp) => Ok(resp.into_iter().choose(&mut rng()).map(Into::into)),
+      Err(e) => match e.kind() {
+        ResolveErrorKind::Proto(proto_error) => match proto_error.kind() {
+          ProtoErrorKind::NoRecordsFound { .. } => Ok(None),
+          _ => Err(e),
+        },
+        _ => Err(e),
+      },
     }
   }
 
   #[tracing::instrument(ret(level = Level::DEBUG), err(level = Level::INFO), skip(self, resolver))]
-  async fn resolve_ipv6(
-    &self,
-    resolver: &TokioAsyncResolver,
-  ) -> Result<Option<Ipv6Addr>, ResolveError> {
+  async fn resolve_ipv6(&self, resolver: &TokioResolver) -> Result<Option<Ipv6Addr>, ResolveError> {
     match resolver.ipv6_lookup(&self.hostname).await {
-      Ok(resp) => Ok(resp.into_iter().choose(&mut thread_rng()).map(Into::into)),
-      Err(e) if matches!(e.kind(), ResolveErrorKind::NoRecordsFound { .. }) => Ok(None),
-      Err(e) => Err(e),
+      Ok(resp) => Ok(resp.into_iter().choose(&mut rng()).map(Into::into)),
+      Err(e) => match e.kind() {
+        ResolveErrorKind::Proto(proto_error) => match proto_error.kind() {
+          ProtoErrorKind::NoRecordsFound { .. } => Ok(None),
+          _ => Err(e),
+        },
+        _ => Err(e),
+      },
     }
   }
 }
