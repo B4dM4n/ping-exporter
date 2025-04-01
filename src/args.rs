@@ -81,7 +81,7 @@ pub struct Args {
 }
 
 #[derive(Debug, clap::Args)]
-#[allow(clippy::struct_field_names)]
+#[expect(clippy::struct_field_names)]
 pub struct Metrics {
   /// Start value for the exponential bucket calculation of the RTT histogram.
   #[arg(

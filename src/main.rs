@@ -123,7 +123,7 @@ async fn main() -> anyhow::Result<()> {
   let mut shutdown_signal = pin!(shutdown_signal());
 
   debug!("Waiting for shutdown signal");
-  #[allow(clippy::redundant_pub_crate)]
+  #[expect(clippy::redundant_pub_crate)]
   {
     tokio::select! {
       _ = &mut app => {}
@@ -189,7 +189,7 @@ async fn shutdown_signal() {
   #[cfg(not(unix))]
   let terminate = std::future::pending::<()>();
 
-  #[allow(clippy::redundant_pub_crate)]
+  #[expect(clippy::redundant_pub_crate)]
   {
     tokio::select! {
       () = ctrl_c => {debug!("Ctrl-C received");},
@@ -498,7 +498,7 @@ impl TargetMap {
     })
   }
 
-  #[allow(clippy::future_not_send, clippy::significant_drop_tightening)]
+  #[expect(clippy::significant_drop_tightening)]
   #[tracing::instrument(skip(self, new_targets))]
   async fn add(&self, new_targets: impl IntoIterator<Item = String>, permanent: bool) {
     let mut targets = self.targets.lock().await;
@@ -563,7 +563,7 @@ impl TargetMap {
     let mut cancelled = pin!(self.cancellation.cancelled());
     let mut interval = tokio::time::interval(SECOND.max(self.dynamic_hold_time / 2));
 
-    #[allow(clippy::redundant_pub_crate)]
+    #[expect(clippy::redundant_pub_crate)]
     loop {
       trace!("loop");
       tokio::select! {
@@ -671,7 +671,7 @@ impl Target {
         id = PingIdentifier(rand::random());
       }
 
-      #[allow(clippy::redundant_pub_crate)]
+      #[expect(clippy::redundant_pub_crate)]
       {
         tokio::select! {
           _ = interval.tick() => (),
@@ -822,7 +822,7 @@ impl Target {
     let mut interval = tokio::time::interval(*resolve_interval);
 
     loop {
-      #[allow(clippy::redundant_pub_crate)]
+      #[expect(clippy::redundant_pub_crate)]
       {
         tokio::select! {
           _ = interval.tick() => (),
