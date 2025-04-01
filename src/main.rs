@@ -695,28 +695,28 @@ impl Target {
               PingResult::Success(rtt) => {
                 args
                   .ping_rtt
-                  .with_label_values(&[&this.hostname, "icmp"])
+                  .with_label_values([&this.hostname, "icmp"].as_slice())
                   .observe(rtt.as_secs_f64());
               }
               PingResult::Timeout => {
                 args
                   .ping_rtt
-                  .with_label_values(&[&this.hostname, "icmp"])
+                  .with_label_values([&this.hostname, "icmp"].as_slice())
                   .observe(f64::INFINITY);
                 args
                   .ping_timeouts
-                  .with_label_values(&[&this.hostname, "icmp"])
+                  .with_label_values([&this.hostname, "icmp"].as_slice())
                   .inc();
               }
               PingResult::Duplicate => {
                 args
                   .ping_duplicates
-                  .with_label_values(&[&this.hostname, "icmp"])
+                  .with_label_values([&this.hostname, "icmp"].as_slice())
                   .inc();
               }
               PingResult::Error => args
                 .ping_errors
-                .with_label_values(&[&this.hostname, "icmp"])
+                .with_label_values([&this.hostname, "icmp"].as_slice())
                 .inc(),
             }
           }
@@ -736,28 +736,28 @@ impl Target {
               PingResult::Success(rtt) => {
                 args
                   .ping_rtt
-                  .with_label_values(&[&this.hostname, "icmp6"])
+                  .with_label_values([&this.hostname, "icmp6"].as_slice())
                   .observe(rtt.as_secs_f64());
               }
               PingResult::Timeout => {
                 args
                   .ping_rtt
-                  .with_label_values(&[&this.hostname, "icmp6"])
+                  .with_label_values([&this.hostname, "icmp6"].as_slice())
                   .observe(f64::INFINITY);
                 args
                   .ping_timeouts
-                  .with_label_values(&[&this.hostname, "icmp6"])
+                  .with_label_values([&this.hostname, "icmp6"].as_slice())
                   .inc();
               }
               PingResult::Duplicate => {
                 args
                   .ping_duplicates
-                  .with_label_values(&[&this.hostname, "icmp6"])
+                  .with_label_values([&this.hostname, "icmp6"].as_slice())
                   .inc();
               }
               PingResult::Error => args
                 .ping_errors
-                .with_label_values(&[&this.hostname, "icmp6"])
+                .with_label_values([&this.hostname, "icmp6"].as_slice())
                 .inc(),
             }
           }
@@ -838,7 +838,7 @@ impl Target {
         Err(e) => {
           info!("Could not resolve IPv4 address of {}: {}", self.hostname, e);
           ping_resolve_errors
-            .with_label_values(&[&self.hostname, "icmp"])
+            .with_label_values([&self.hostname, "icmp"].as_slice())
             .inc();
           None
         }
@@ -849,7 +849,7 @@ impl Target {
         Err(e) => {
           info!("Could not resolve IPv6 address of {}: {}", self.hostname, e);
           ping_resolve_errors
-            .with_label_values(&[&self.hostname, "icmp6"])
+            .with_label_values([&self.hostname, "icmp6"].as_slice())
             .inc();
           None
         }
