@@ -123,16 +123,16 @@ async fn main() -> anyhow::Result<()> {
   let mut shutdown_signal = pin!(shutdown_signal());
 
   debug!("Waiting for shutdown signal");
-  #[expect(clippy::redundant_pub_crate)]
-  {
-    tokio::select! {
-      _ = &mut app => {}
-      () = &mut shutdown_signal => {}
-    };
-  }
+  tokio::select! {
+    _ = &mut app => {
+      cancellation.cancel();
+    }
+    () = &mut shutdown_signal => {
+      cancellation.cancel();
+      let _ = app.await;
+    }
+  };
 
-  cancellation.cancel();
-  let _ = app.await;
   let targets = std::mem::take(&mut *targets.targets.lock().await);
   for (
     hostname,
@@ -189,13 +189,10 @@ async fn shutdown_signal() {
   #[cfg(not(unix))]
   let terminate = std::future::pending::<()>();
 
-  #[expect(clippy::redundant_pub_crate)]
-  {
-    tokio::select! {
-      () = ctrl_c => {debug!("Ctrl-C received");},
-      () = terminate => {debug!("SIGTERM received");},
-    }
-  }
+  tokio::select! {
+    () = ctrl_c => {debug!("Ctrl-C received");},
+    () = terminate => {debug!("SIGTERM received");},
+  };
 }
 
 struct Metrics {
@@ -396,7 +393,7 @@ impl App {
     .await
     {
       error!("Timeout while waiting for all lsitener tasks to finish");
-    };
+    }
 
     // Return the potential error of the first finished task
     Ok(res??)
@@ -426,7 +423,7 @@ impl App {
         Ok(Auth::Bearer(bearer)) => {
           if !auth_credentials.bearer.contains(&bearer.0) {
             return (StatusCode::UNAUTHORIZED, "Invalid access token").into_response();
-          };
+          }
         }
 
         Err(e) => return e.into_response(),
@@ -563,7 +560,6 @@ impl TargetMap {
     let mut cancelled = pin!(self.cancellation.cancelled());
     let mut interval = tokio::time::interval(SECOND.max(self.dynamic_hold_time / 2));
 
-    #[expect(clippy::redundant_pub_crate)]
     loop {
       trace!("loop");
       tokio::select! {
@@ -671,99 +667,28 @@ impl Target {
         id = PingIdentifier(rand::random());
       }
 
-      #[expect(clippy::redundant_pub_crate)]
-      {
-        tokio::select! {
-          _ = interval.tick() => (),
-          () = self.cancellation.cancelled() => {
-            break;
-          }
-        };
-      }
+      tokio::select! {
+        _ = interval.tick() => (),
+        () = self.cancellation.cancelled() => {
+          break;
+        }
+      };
 
       trace!(?seq, "loop");
 
       let addresses = self.addresses.load();
       if let Some(addr) = addresses.ipv4_addr {
-        let mut pinger = client_v4.pinger(addr.into(), id).await;
-        pinger.timeout(*send_timeout);
-
-        let this = self.clone();
-        let args = args.clone();
-        tokio::spawn(
-          async move {
-            match this.send_ipv4(seq, addr, pinger).await {
-              PingResult::Success(rtt) => {
-                args
-                  .ping_rtt
-                  .with_label_values([&this.hostname, "icmp"].as_slice())
-                  .observe(rtt.as_secs_f64());
-              }
-              PingResult::Timeout => {
-                args
-                  .ping_rtt
-                  .with_label_values([&this.hostname, "icmp"].as_slice())
-                  .observe(f64::INFINITY);
-                args
-                  .ping_timeouts
-                  .with_label_values([&this.hostname, "icmp"].as_slice())
-                  .inc();
-              }
-              PingResult::Duplicate => {
-                args
-                  .ping_duplicates
-                  .with_label_values([&this.hostname, "icmp"].as_slice())
-                  .inc();
-              }
-              PingResult::Error => args
-                .ping_errors
-                .with_label_values([&this.hostname, "icmp"].as_slice())
-                .inc(),
-            }
-          }
-          .in_current_span(),
-        );
+        self
+          .clone()
+          .send_loop_v4(client_v4, addr, id, seq, *send_timeout, args.clone())
+          .await;
       }
 
       if let Some(addr) = addresses.ipv6_addr {
-        let mut pinger = client_v6.pinger(addr.into(), id).await;
-        pinger.timeout(*send_timeout);
-
-        let this = self.clone();
-        let args = args.clone();
-        tokio::spawn(
-          async move {
-            match this.send_ipv6(seq, addr, pinger).await {
-              PingResult::Success(rtt) => {
-                args
-                  .ping_rtt
-                  .with_label_values([&this.hostname, "icmp6"].as_slice())
-                  .observe(rtt.as_secs_f64());
-              }
-              PingResult::Timeout => {
-                args
-                  .ping_rtt
-                  .with_label_values([&this.hostname, "icmp6"].as_slice())
-                  .observe(f64::INFINITY);
-                args
-                  .ping_timeouts
-                  .with_label_values([&this.hostname, "icmp6"].as_slice())
-                  .inc();
-              }
-              PingResult::Duplicate => {
-                args
-                  .ping_duplicates
-                  .with_label_values([&this.hostname, "icmp6"].as_slice())
-                  .inc();
-              }
-              PingResult::Error => args
-                .ping_errors
-                .with_label_values([&this.hostname, "icmp6"].as_slice())
-                .inc(),
-            }
-          }
-          .in_current_span(),
-        );
+        self
+          .clone()
+          .send_loop_v6(client_v6, addr, id, seq, *send_timeout, args.clone())
+          .await;
       }
     }
 
@@ -778,6 +703,100 @@ impl Target {
     let _ = args.ping_rtt.remove_label_values(values6);
     let _ = args.ping_duplicates.remove_label_values(values6);
     let _ = args.ping_errors.remove_label_values(values6);
+  }
+
+  async fn send_loop_v4(
+    self: Arc<Self>,
+    client_v4: &Client,
+    addr: Ipv4Addr,
+    id: PingIdentifier,
+    seq: u16,
+    send_timeout: Duration,
+    args: Arc<TargetSendArgs>,
+  ) {
+    let mut pinger = client_v4.pinger(addr.into(), id).await;
+    pinger.timeout(send_timeout);
+
+    tokio::spawn(
+      async move {
+        match self.send_ipv4(seq, addr, pinger).await {
+          PingResult::Success(rtt) => {
+            args
+              .ping_rtt
+              .with_label_values([&self.hostname, "icmp"].as_slice())
+              .observe(rtt.as_secs_f64());
+          }
+          PingResult::Timeout => {
+            args
+              .ping_rtt
+              .with_label_values([&self.hostname, "icmp"].as_slice())
+              .observe(f64::INFINITY);
+            args
+              .ping_timeouts
+              .with_label_values([&self.hostname, "icmp"].as_slice())
+              .inc();
+          }
+          PingResult::Duplicate => {
+            args
+              .ping_duplicates
+              .with_label_values([&self.hostname, "icmp"].as_slice())
+              .inc();
+          }
+          PingResult::Error => args
+            .ping_errors
+            .with_label_values([&self.hostname, "icmp"].as_slice())
+            .inc(),
+        }
+      }
+      .in_current_span(),
+    );
+  }
+
+  async fn send_loop_v6(
+    self: Arc<Self>,
+    client_v6: &Client,
+    addr: Ipv6Addr,
+    id: PingIdentifier,
+    seq: u16,
+    send_timeout: Duration,
+    args: Arc<TargetSendArgs>,
+  ) {
+    let mut pinger = client_v6.pinger(addr.into(), id).await;
+    pinger.timeout(send_timeout);
+
+    tokio::spawn(
+      async move {
+        match self.send_ipv6(seq, addr, pinger).await {
+          PingResult::Success(rtt) => {
+            args
+              .ping_rtt
+              .with_label_values([&self.hostname, "icmp6"].as_slice())
+              .observe(rtt.as_secs_f64());
+          }
+          PingResult::Timeout => {
+            args
+              .ping_rtt
+              .with_label_values([&self.hostname, "icmp6"].as_slice())
+              .observe(f64::INFINITY);
+            args
+              .ping_timeouts
+              .with_label_values([&self.hostname, "icmp6"].as_slice())
+              .inc();
+          }
+          PingResult::Duplicate => {
+            args
+              .ping_duplicates
+              .with_label_values([&self.hostname, "icmp6"].as_slice())
+              .inc();
+          }
+          PingResult::Error => args
+            .ping_errors
+            .with_label_values([&self.hostname, "icmp6"].as_slice())
+            .inc(),
+        }
+      }
+      .in_current_span(),
+    );
   }
 
   #[tracing::instrument(ret(level = Level::DEBUG), skip(self, pinger))]
@@ -822,15 +841,12 @@ impl Target {
     let mut interval = tokio::time::interval(*resolve_interval);
 
     loop {
-      #[expect(clippy::redundant_pub_crate)]
-      {
-        tokio::select! {
-          _ = interval.tick() => (),
-          () = self.cancellation.cancelled() => {
-            return;
-          }
-        };
-      }
+      tokio::select! {
+        _ = interval.tick() => (),
+        () = self.cancellation.cancelled() => {
+          return;
+        }
+      };
 
       trace!("loop");
 

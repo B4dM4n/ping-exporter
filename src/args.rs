@@ -2,7 +2,7 @@ use std::{
   collections::{HashMap, HashSet},
   fmt::Display,
   fs::File,
-  io::{Error as IoError, ErrorKind as IoErrorKind, Result as IoResult},
+  io::{Error as IoError, Result as IoResult},
   ops::Deref,
   path::Path,
   str::FromStr,
@@ -165,7 +165,7 @@ impl AuthCredentials {
   }
 
   fn from_file(file: &mut File) -> IoResult<Self> {
-    serde_yml::from_reader(file).map_err(|e| IoError::new(IoErrorKind::Other, e))
+    serde_yml::from_reader(file).map_err(IoError::other)
   }
 
   fn path_value_parser() -> ValueParser {
