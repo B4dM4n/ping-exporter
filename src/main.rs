@@ -9,7 +9,7 @@ mod args;
 mod util;
 
 use std::{
-  collections::{hash_map::Entry, HashMap},
+  collections::{hash_map::Entry, HashMap, HashSet},
   fmt,
   future::IntoFuture,
   io,
@@ -401,7 +401,7 @@ impl App {
 
   async fn metrics_get(
     self: Arc<Self>,
-    args: Query<MetricsGetArgs>,
+    Query(args): Query<MetricsGetArgs>,
     auth: Result<Auth, AuthRejection>,
   ) -> Response {
     if let Some(auth_credentials) = self.auth_credentials.as_ref() {
@@ -430,23 +430,80 @@ impl App {
       }
     }
 
-    if let Some((dynamic_targets, new_targets)) = self.dynamic_targets.as_ref().zip(args.0.targets)
-    {
+    let target_names = args
+      .targets
+      .unwrap_or_default()
+      .split(',')
+      .map(str::trim)
+      .filter(|s| !s.is_empty())
+      .map(ToOwned::to_owned)
+      .collect::<HashSet<_>>();
+
+    if let Some(dynamic_targets) = self.dynamic_targets.as_ref() {
       dynamic_targets
-        .add(
-          new_targets
-            .split(',')
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(ToOwned::to_owned),
-          false,
-        )
+        .add(target_names.iter().map(ToOwned::to_owned), false)
         .await;
     }
 
     let mut buffer = Vec::with_capacity(4096);
     let encoder = prometheus::TextEncoder::new();
-    let metric_families = self.registry.gather();
+    let mut metric_families = self.registry.gather();
+
+    match args.metrics_filter {
+      MetricsFilter::All => (),
+      MetricsFilter::ExcludeOtherTargets => {
+        let tm = if let Some(tm) = self.dynamic_targets.as_ref() {
+          Some(tm.targets.lock().await)
+        } else {
+          None
+        };
+
+        metric_families.retain_mut(|mf| {
+          if matches!(
+            mf.name(),
+            "ping_rtt"
+              | "ping_timeouts"
+              | "ping_errors"
+              | "ping_resolve_errors"
+              | "ping_duplicates"
+          ) {
+            mf.mut_metric().retain(|m| {
+              m.get_label().iter().any(|lp| {
+                lp.name() == "target"
+                  && (tm
+                    .as_ref()
+                    .is_none_or(|tm| tm.get(lp.value()).is_some_and(|th| th.permanent))
+                    || target_names.contains(lp.value()))
+              })
+            });
+          }
+          !mf.get_metric().is_empty()
+        });
+      }
+      MetricsFilter::TargetsOnly => {
+        metric_families.retain_mut(|mf| {
+          let retain = matches!(
+            mf.name(),
+            "ping_rtt"
+              | "ping_timeouts"
+              | "ping_errors"
+              | "ping_resolve_errors"
+              | "ping_duplicates"
+          );
+          debug!(name = mf.name(), retain);
+          if retain {
+            debug!(metrics=?mf.get_metric(),"before");
+            mf.mut_metric().retain(|m| {
+              m.get_label()
+                .iter()
+                .any(|lp| lp.name() == "target" && target_names.contains(lp.value()))
+            });
+            debug!(metrics=?mf.get_metric(),"after");
+          }
+          retain && !mf.get_metric().is_empty()
+        });
+      }
+    }
     if let Err(err) = encoder.encode(&metric_families, &mut buffer) {
       return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response();
     }
@@ -455,9 +512,23 @@ impl App {
   }
 }
 
+#[derive(Debug, Default, Deserialize)]
+enum MetricsFilter {
+  /// Return all metrics.
+  #[default]
+  All,
+  /// Return all metrics, except dynamic targets not specified in this request.
+  ExcludeOtherTargets,
+  /// Only return targets specified in this request, excluding process and
+  /// target independent series.
+  TargetsOnly,
+}
+
 #[derive(Debug, Deserialize)]
 struct MetricsGetArgs {
   targets: Option<String>,
+  #[serde(default)]
+  metrics_filter: MetricsFilter,
 }
 
 struct TargetMap {
