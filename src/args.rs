@@ -75,7 +75,7 @@ pub struct Args {
   /// YAML file containing authentication credentials.
   ///
   /// When specified (even if empty), only metrics requests with one of the
-  /// contained credentials are accepted. asdgghqas qweq wqwqewt
+  /// contained credentials are accepted.
   #[arg(long, value_name = "PATH", value_parser = AuthCredentials::path_value_parser())]
   pub auth_credentials: Option<AuthCredentials>,
 }
