@@ -9,7 +9,7 @@ mod args;
 mod util;
 
 use std::{
-  collections::{hash_map::Entry, HashMap, HashSet},
+  collections::{HashMap, HashSet, hash_map::Entry},
   fmt,
   future::IntoFuture,
   io,
@@ -26,20 +26,20 @@ use arc_swap::ArcSwap;
 use args::AuthCredentials;
 use axum::{
   extract::{ConnectInfo, Query},
-  http::{header, Request, StatusCode},
+  http::{Request, StatusCode, header},
   response::{IntoResponse as _, Response},
 };
-use hickory_resolver::{proto::ProtoErrorKind, ResolveError, ResolveErrorKind, TokioResolver};
+use hickory_resolver::{ResolveError, ResolveErrorKind, TokioResolver, proto::ProtoErrorKind};
 use nix::sys::socket::{setsockopt, sockopt};
 use password_auth::VerifyError;
 use prometheus::{Encoder, HistogramVec, IntCounterVec, IntGauge, Registry};
 use rand::{rng, seq::IteratorRandom};
 use serde::Deserialize;
-use surge_ping::{Client, Config, PingIdentifier, PingSequence, Pinger, SurgeError, ICMP};
+use surge_ping::{Client, Config, ICMP, PingIdentifier, PingSequence, Pinger, SurgeError};
 use tokio::{sync::Mutex, task::JoinHandle, time::timeout};
 use tokio_util::sync::CancellationToken;
 use tower_http::trace::TraceLayer;
-use tracing::{debug, error, info, trace, warn, Instrument as _, Level};
+use tracing::{Instrument as _, Level, debug, error, info, trace, warn};
 use util::{Auth, AuthRejection};
 
 const SECOND: Duration = Duration::from_secs(1);
@@ -295,7 +295,7 @@ impl App {
     web_listen_addresses: Vec<String>,
     web_systemd_socket: bool,
   ) -> anyhow::Result<()> {
-    use axum::{routing::get, Router};
+    use axum::{Router, routing::get};
 
     if !web_telemetry_path.starts_with('/') {
       web_telemetry_path.insert(0, '/');

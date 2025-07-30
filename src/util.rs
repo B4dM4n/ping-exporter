@@ -1,6 +1,6 @@
 use axum::{
   extract::FromRequestParts,
-  http::{header, request::Parts, StatusCode},
+  http::{StatusCode, header, request::Parts},
   response::{IntoResponse, Response},
 };
 use base64::Engine as _;

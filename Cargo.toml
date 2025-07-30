@@ -1,7 +1,7 @@
 [package]
 authors = ["Fabian Möller <fabianm88@gmail.com>"]
 description = "Prometheus exporter reporting ping statistics"
-edition = "2021"
+edition = "2024"
 keywords = ["prometheus", "prometheus-exporter", "icmp", "ping"]
 license = "MIT OR Apache-2.0"
 name = "ping-exporter"
