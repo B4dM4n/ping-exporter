@@ -1,9 +1,4 @@
-#![warn(
-  missing_debug_implementations,
-  rust_2018_idioms,
-  clippy::pedantic,
-  clippy::nursery
-)]
+//! A Prometheus exporter for ping statistics.
 
 mod args;
 mod util;
@@ -11,8 +6,7 @@ mod util;
 use std::{
   collections::{HashMap, HashSet, hash_map::Entry},
   fmt,
-  future::IntoFuture,
-  io,
+  io::Error as IoError,
   net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
   os::fd::{BorrowedFd, FromRawFd as _},
   pin::pin,
@@ -107,7 +101,7 @@ async fn main() -> anyhow::Result<()> {
     cancellation.clone(),
   );
   targets.add(args.targets, true).await;
-  tokio::spawn(targets.clone().cleanup_task());
+  drop(tokio::spawn(targets.clone().cleanup_task()));
 
   let app = Arc::new(App::new(
     registry,
@@ -129,7 +123,7 @@ async fn main() -> anyhow::Result<()> {
     }
     () = &mut shutdown_signal => {
       cancellation.cancel();
-      let _ = app.await;
+      drop(app.await);
     }
   };
 
@@ -180,7 +174,7 @@ async fn shutdown_signal() {
 
   #[cfg(unix)]
   let terminate = async {
-    signal::unix::signal(signal::unix::SignalKind::terminate())
+    let _ = signal::unix::signal(signal::unix::SignalKind::terminate())
       .expect("failed to install signal handler")
       .recv()
       .await;
@@ -303,7 +297,7 @@ impl App {
 
     let mut router = Router::new();
     if web_telemetry_path != "/" {
-      router = router.route("/", get(|| async { "" }));
+      router = router.route("/", get(async || ""));
     }
 
     let router = router
@@ -337,7 +331,7 @@ impl App {
       sd_notify::listen_fds()?
         .map(|fd| unsafe { std::net::TcpListener::from_raw_fd(fd) })
         .map(tokio::net::TcpListener::from_std)
-        .collect::<Result<Vec<_>, io::Error>>()?
+        .collect::<Result<Vec<_>, IoError>>()?
     } else {
       futures_util::future::join_all(
         web_listen_addresses
@@ -346,7 +340,7 @@ impl App {
       )
       .await
       .into_iter()
-      .collect::<Result<Vec<_>, io::Error>>()?
+      .collect::<Result<Vec<_>, IoError>>()?
     };
     if listeners.is_empty() {
       bail!(
@@ -600,7 +594,7 @@ impl TargetMap {
         let join_send = tokio::spawn(target.clone().send_loop(self.send_args.clone()));
         let join_resolve = tokio::spawn(target.resolve_loop(self.resolve_args.clone()));
 
-        v.insert(TargetHandle {
+        let _ = v.insert(TargetHandle {
           permanent,
           last_seen: now,
           cancellation,
@@ -764,16 +758,32 @@ impl Target {
     }
 
     let values = &[&self.hostname, "icmp"];
-    let _ = args.ping_rtt.remove_label_values(values);
-    let _ = args.ping_rtt.remove_label_values(values);
-    let _ = args.ping_duplicates.remove_label_values(values);
-    let _ = args.ping_errors.remove_label_values(values);
+    if let Err(error) = args.ping_duplicates.remove_label_values(values) {
+      warn!(?error, "ping_duplicates.remove_label_values");
+    }
+    if let Err(error) = args.ping_errors.remove_label_values(values) {
+      warn!(?error, "ping_errors.remove_label_values");
+    }
+    if let Err(error) = args.ping_rtt.remove_label_values(values) {
+      warn!(?error, "ping_rtt.remove_label_values");
+    }
+    if let Err(error) = args.ping_timeouts.remove_label_values(values) {
+      warn!(?error, "ping_timeouts.remove_label_values");
+    }
 
     let values6 = &[&self.hostname, "icmp6"];
-    let _ = args.ping_rtt.remove_label_values(values6);
-    let _ = args.ping_rtt.remove_label_values(values6);
-    let _ = args.ping_duplicates.remove_label_values(values6);
-    let _ = args.ping_errors.remove_label_values(values6);
+    if let Err(error) = args.ping_duplicates.remove_label_values(values6) {
+      warn!(?error, "ping_duplicates.remove_label_values");
+    }
+    if let Err(error) = args.ping_errors.remove_label_values(values6) {
+      warn!(?error, "ping_errors.remove_label_values");
+    }
+    if let Err(error) = args.ping_rtt.remove_label_values(values6) {
+      warn!(?error, "ping_rtt.remove_label_values");
+    }
+    if let Err(error) = args.ping_timeouts.remove_label_values(values6) {
+      warn!(?error, "ping_timeouts.remove_label_values");
+    }
   }
 
   async fn send_loop_v4(
@@ -786,9 +796,9 @@ impl Target {
     args: Arc<TargetSendArgs>,
   ) {
     let mut pinger = client_v4.pinger(addr.into(), id).await;
-    pinger.timeout(send_timeout);
+    let _ = pinger.timeout(send_timeout);
 
-    tokio::spawn(
+    let _unused = tokio::spawn(
       async move {
         match self.send_ipv4(seq, addr, pinger).await {
           PingResult::Success(rtt) => {
@@ -833,9 +843,9 @@ impl Target {
     args: Arc<TargetSendArgs>,
   ) {
     let mut pinger = client_v6.pinger(addr.into(), id).await;
-    pinger.timeout(send_timeout);
+    let _ = pinger.timeout(send_timeout);
 
-    tokio::spawn(
+    let _unused = tokio::spawn(
       async move {
         match self.send_ipv6(seq, addr, pinger).await {
           PingResult::Success(rtt) => {
