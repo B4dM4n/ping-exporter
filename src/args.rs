@@ -9,8 +9,12 @@ use std::{
   time::Duration,
 };
 
+use anyhow::Context as _;
 use clap::builder::{PathBufValueParser, TypedValueParser as _, ValueParser};
+use openidconnect::{ClientId, IssuerUrl, core::CoreProviderMetadata};
 use serde::Deserialize;
+
+use crate::util::OidcClient;
 
 /// Prometheus exporter reporting ping statistics
 #[derive(Debug, clap::Parser)]
@@ -151,15 +155,33 @@ where
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AuthCredentials {
   #[serde(default)]
   pub basic: HashMap<String, String>,
 
   #[serde(default)]
   pub bearer: HashSet<String>,
+
+  pub oidc: Option<AuthCredentialsOidc>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuthCredentialsOidc {
+  pub client_id: ClientId,
+  pub issuer_url: IssuerUrl,
 }
 
 impl AuthCredentials {
+  pub async fn setup_oidc_client(&self) -> Option<anyhow::Result<OidcClient>> {
+    self
+      .oidc
+      .clone()
+      .map_async(AuthCredentialsOidc::setup_oidc_client)
+      .await
+  }
+
   fn from_path(path: impl AsRef<Path>) -> IoResult<Self> {
     Self::from_file(&mut File::open(path)?)
   }
@@ -170,5 +192,64 @@ impl AuthCredentials {
 
   fn path_value_parser() -> ValueParser {
     ValueParser::new(PathBufValueParser::new().try_map(Self::from_path))
+  }
+}
+
+impl AuthCredentialsOidc {
+  async fn setup_oidc_client(self) -> anyhow::Result<OidcClient> {
+    Ok(OidcClient::from_provider_metadata(
+      CoreProviderMetadata::discover_async(self.issuer_url, &reqwest::Client::new())
+        .await
+        .context("fetch OIDC issuer configuration")?,
+      self.client_id,
+      None,
+    ))
+  }
+}
+
+pub trait MapAsync<F> {
+  type Output;
+  async fn map_async(self, map: F) -> Self::Output;
+}
+
+impl<T, U, F, Fu> MapAsync<F> for Option<T>
+where
+  T: Send,
+  U: Send,
+  F: FnOnce(T) -> Fu + 'static,
+  Fu: Future<Output = U> + Send,
+{
+  type Output = Option<U>;
+
+  async fn map_async(self, map: F) -> Self::Output {
+    match self {
+      Some(t) => {
+        let u = map(t).await;
+        Some(u)
+      }
+      None => None,
+    }
+  }
+}
+
+pub trait AndThenAsync<F> {
+  type Output;
+  async fn and_then_async(self, and_then: F) -> Self::Output;
+}
+
+impl<T, U, F, Fu> AndThenAsync<F> for Option<T>
+where
+  T: Send,
+  U: Send,
+  F: FnOnce(T) -> Fu + 'static,
+  Fu: Future<Output = Option<U>> + Send,
+{
+  type Output = Option<U>;
+
+  async fn and_then_async(self, and_then: F) -> Self::Output {
+    match self {
+      Some(t) => and_then(t).await,
+      None => None,
+    }
   }
 }

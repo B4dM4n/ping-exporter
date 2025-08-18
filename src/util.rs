@@ -4,6 +4,15 @@ use axum::{
   response::{IntoResponse, Response},
 };
 use base64::Engine as _;
+use openidconnect::{
+  Client, EmptyAdditionalClaims, EmptyExtraTokenFields, EndpointMaybeSet, EndpointNotSet,
+  EndpointSet, IdToken, IdTokenFields, NonceVerifier, StandardErrorResponse, StandardTokenResponse,
+  core::{
+    CoreAuthDisplay, CoreAuthPrompt, CoreErrorResponseType, CoreGenderClaim, CoreJsonWebKey,
+    CoreJweContentEncryptionAlgorithm, CoreJwsSigningAlgorithm, CoreRevocableToken,
+    CoreRevocationErrorResponse, CoreTokenIntrospectionResponse, CoreTokenType,
+  },
+};
 use password_auth::VerifyError;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -200,4 +209,59 @@ pub fn verify_password(password: impl AsRef<[u8]>, hash: &str) -> Result<(), Ver
       }
     },
   )
+}
+
+pub type OidcClient<
+  AdditionalClaims = EmptyAdditionalClaims,
+  HasAuthUrl = EndpointSet,
+  HasDeviceAuthUrl = EndpointNotSet,
+  HasIntrospectionUrl = EndpointNotSet,
+  HasRevocationUrl = EndpointNotSet,
+  HasTokenUrl = EndpointMaybeSet,
+  HasUserInfoUrl = EndpointMaybeSet,
+> = Client<
+  AdditionalClaims,
+  CoreAuthDisplay,
+  CoreGenderClaim,
+  CoreJweContentEncryptionAlgorithm,
+  CoreJsonWebKey,
+  CoreAuthPrompt,
+  StandardErrorResponse<CoreErrorResponseType>,
+  OidcTokenResponse<AdditionalClaims>,
+  CoreTokenIntrospectionResponse,
+  CoreRevocableToken,
+  CoreRevocationErrorResponse,
+  HasAuthUrl,
+  HasDeviceAuthUrl,
+  HasIntrospectionUrl,
+  HasRevocationUrl,
+  HasTokenUrl,
+  HasUserInfoUrl,
+>;
+
+type OidcTokenResponse<AdditionalClaims> =
+  StandardTokenResponse<OidcIdTokenFields<AdditionalClaims>, CoreTokenType>;
+
+type OidcIdTokenFields<AdditionalClaims> = IdTokenFields<
+  AdditionalClaims,
+  EmptyExtraTokenFields,
+  CoreGenderClaim,
+  CoreJweContentEncryptionAlgorithm,
+  CoreJwsSigningAlgorithm,
+>;
+
+pub type AccessToken = IdToken<
+  EmptyAdditionalClaims,
+  CoreGenderClaim,
+  CoreJweContentEncryptionAlgorithm,
+  CoreJwsSigningAlgorithm,
+>;
+
+#[derive(Debug)]
+pub struct Ignore;
+
+impl NonceVerifier for Ignore {
+  fn verify(self, _nonce: Option<&openidconnect::Nonce>) -> Result<(), String> {
+    Ok(())
+  }
 }

@@ -7,3 +7,7 @@ basic:
 
 bearer:
   - token-9a0c5c67-7569-486b-99f6-b532159763f7
+
+oidc:
+  client_id: asdfg
+  issuer_url: https://sso.example.com/application/o/app/

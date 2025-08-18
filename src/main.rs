@@ -17,7 +17,7 @@ use std::{
 
 use anyhow::bail;
 use arc_swap::ArcSwap;
-use args::AuthCredentials;
+use args::AndThenAsync as _;
 use axum::{
   extract::{ConnectInfo, Query},
   http::{Request, StatusCode, header},
@@ -34,7 +34,7 @@ use tokio::{sync::Mutex, task::JoinHandle, time::timeout};
 use tokio_util::sync::CancellationToken;
 use tower_http::trace::TraceLayer;
 use tracing::{Instrument as _, Level, debug, error, info, trace, warn};
-use util::{Auth, AuthRejection};
+use util::{AccessToken, Auth, AuthRejection, Ignore, OidcClient};
 
 const SECOND: Duration = Duration::from_secs(1);
 
@@ -103,10 +103,18 @@ async fn main() -> anyhow::Result<()> {
   targets.add(args.targets, true).await;
   drop(tokio::spawn(targets.clone().cleanup_task()));
 
+  let oidc_client = args
+    .auth_credentials
+    .as_ref()
+    .and_then_async(args::AuthCredentials::setup_oidc_client)
+    .await
+    .transpose()?;
+
   let app = Arc::new(App::new(
     registry,
     args.dynamic_targets.then(|| targets.clone()),
     args.auth_credentials,
+    oidc_client,
   ));
   let mut app = pin!(app.run(
     cancellation.child_token(),
@@ -265,19 +273,22 @@ fn setup_metrics(registry: &Registry, args: &args::Metrics) -> anyhow::Result<Me
 struct App {
   registry: Registry,
   dynamic_targets: Option<Arc<TargetMap>>,
-  auth_credentials: Option<AuthCredentials>,
+  auth_credentials: Option<args::AuthCredentials>,
+  oidc_client: Option<OidcClient>,
 }
 
 impl App {
   const fn new(
     registry: Registry,
     dynamic_targets: Option<Arc<TargetMap>>,
-    auth_credentials: Option<AuthCredentials>,
+    auth_credentials: Option<args::AuthCredentials>,
+    oidc_client: Option<OidcClient>,
   ) -> Self {
     Self {
       registry,
       dynamic_targets,
       auth_credentials,
+      oidc_client,
     }
   }
 
@@ -412,12 +423,30 @@ impl App {
           if let Err(e) = util::verify_password(basic.1.as_deref().unwrap_or_default(), hash) {
             return (StatusCode::UNAUTHORIZED, e.to_string()).into_response();
           }
+
+          debug!(user = %basic.0,"basic auth validated");
         }
 
-        Ok(Auth::Bearer(bearer)) => {
-          if !auth_credentials.bearer.contains(&bearer.0) {
-            return (StatusCode::UNAUTHORIZED, "Invalid access token").into_response();
+        Ok(Auth::Bearer(bearer)) => 'success: {
+          if auth_credentials.bearer.contains(&bearer.0) {
+            debug!("static bearer token match");
+            break 'success;
           }
+
+          if let Some(oidc_client) = &self.oidc_client {
+            match AccessToken::from_str(&bearer.0) {
+              Ok(token) => match token.claims(&oidc_client.id_token_verifier(), Ignore) {
+                Ok(claims) => {
+                  debug!(subject = ?claims.subject().as_str(), expiration = ?claims.expiration(), "access_token validated");
+                  break 'success;
+                }
+                Err(error) => info!(?error, "verify access_token failed"),
+              },
+              Err(error) => info!(?error, "parse access_token failed"),
+            }
+          }
+
+          return (StatusCode::UNAUTHORIZED, "Invalid access token").into_response();
         }
 
         Err(e) => return e.into_response(),

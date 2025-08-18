@@ -19,9 +19,11 @@ futures-util = { version = "0.3.31", default-features = false }
 hickory-resolver = { version = "0.25.2", features = ["tokio"] }
 humantime = "2.2.0"
 nix = { version = "0.30.1", features = ["socket"] }
+openidconnect = "4.0"
 password-auth = "1.0.0"
 prometheus = { version = "0.14.0", default-features = false, features = ["process"] }
 rand = "0.9.1"
+reqwest = { version = "0.12", default-features = false }
 sd-notify = "0.4.5"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_yml = "0.0.12"
