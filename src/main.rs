@@ -34,7 +34,7 @@ use tokio::{sync::Mutex, task::JoinHandle, time::timeout};
 use tokio_util::sync::CancellationToken;
 use tower_http::trace::TraceLayer;
 use tracing::{Instrument as _, Level, debug, error, info, trace, warn};
-use util::{AccessToken, Auth, AuthRejection, Ignore, OidcClient};
+use util::{AccessToken, Auth, AuthBasic, AuthBearer, AuthRejection, Ignore, OidcClient};
 
 const SECOND: Duration = Duration::from_secs(1);
 
@@ -64,13 +64,9 @@ async fn main() -> anyhow::Result<()> {
 
   let registry = Registry::new();
   let Metrics {
-    ping_targets,
-    ping_dynamic_targets,
-    ping_duplicates,
-    ping_errors,
-    ping_rtt,
-    ping_timeouts,
-    ping_resolve_errors,
+    resolve: metrics_resolve,
+    send: metrics_send,
+    target: metrics_target,
     send_timeout,
   } = setup_metrics(&registry, &args.metrics)?;
 
@@ -80,20 +76,16 @@ async fn main() -> anyhow::Result<()> {
     send_timeout,
     client_v4,
     client_v6,
-    ping_duplicates,
-    ping_errors,
-    ping_rtt,
-    ping_timeouts,
+    metrics: metrics_send,
   });
   let target_resolve_args = Arc::new(TargetResolveArgs {
     resolve_interval: args.resolve_interval.into(),
     resolver,
-    ping_resolve_errors,
+    metrics: metrics_resolve,
   });
 
   let targets = TargetMap::new(
-    ping_targets,
-    ping_dynamic_targets,
+    metrics_target,
     args.targets_max,
     args.dynamic_targets_hold.into(),
     target_send_args.clone(),
@@ -198,14 +190,26 @@ async fn shutdown_signal() {
 }
 
 struct Metrics {
-  ping_targets: IntGauge,
-  ping_dynamic_targets: IntGauge,
-  ping_duplicates: IntCounterVec,
-  ping_errors: IntCounterVec,
-  ping_rtt: HistogramVec,
-  ping_timeouts: IntCounterVec,
-  ping_resolve_errors: IntCounterVec,
+  resolve: MetricsResolve,
+  send: MetricsSend,
+  target: MetricsTarget,
   send_timeout: Duration,
+}
+
+struct MetricsSend {
+  duplicates: IntCounterVec,
+  errors: IntCounterVec,
+  rtt: HistogramVec,
+  timeouts: IntCounterVec,
+}
+
+struct MetricsResolve {
+  errors: IntCounterVec,
+}
+
+struct MetricsTarget {
+  total: IntGauge,
+  dynamic: IntGauge,
 }
 
 fn setup_metrics(registry: &Registry, args: &args::Metrics) -> anyhow::Result<Metrics> {
@@ -213,59 +217,57 @@ fn setup_metrics(registry: &Registry, args: &args::Metrics) -> anyhow::Result<Me
     prometheus::process_collector::ProcessCollector::for_self(),
   ))?;
 
-  let ping_targets = prometheus::register_int_gauge_with_registry!(
-    "ping_targets",
-    "Number of currently active targets",
-    registry
-  )?;
-  let ping_dynamic_targets = prometheus::register_int_gauge_with_registry!(
-    "ping_dynamic_targets",
-    "Number of currently active dynamic targets",
-    registry
-  )?;
-
   let rtt_buckets = args.exponential_buckets()?;
   let send_timeout = Duration::from_secs_f64(*rtt_buckets.last().unwrap());
-  let ping_rtt = prometheus::register_histogram_vec_with_registry!(
-    "ping_rtt",
-    "Round Trip Time of the packets send to the targets",
-    &["target", "version"],
-    rtt_buckets,
-    registry
-  )?;
-  let ping_timeouts = prometheus::register_int_counter_vec_with_registry!(
-    "ping_timeouts",
-    "Number of packets for which no answer was received in the maxium bucket time",
-    &["target", "version"],
-    registry
-  )?;
-  let ping_errors = prometheus::register_int_counter_vec_with_registry!(
-    "ping_errors",
-    "Number of packets failed to send or receive due to errors",
-    &["target", "version"],
-    registry
-  )?;
-  let ping_resolve_errors = prometheus::register_int_counter_vec_with_registry!(
-    "ping_resolve_errors",
-    "Number of time the hostname resolve failed",
-    &["target", "version"],
-    registry
-  )?;
-  let ping_duplicates = prometheus::register_int_counter_vec_with_registry!(
-    "ping_duplicates",
-    "Number of duplicate packages received",
-    &["target", "version"],
-    registry
-  )?;
 
   Ok(Metrics {
-    ping_targets,
-    ping_dynamic_targets,
-    ping_duplicates,
-    ping_errors,
-    ping_rtt,
-    ping_timeouts,
-    ping_resolve_errors,
+    resolve: MetricsResolve {
+      errors: prometheus::register_int_counter_vec_with_registry!(
+        "ping_resolve_errors",
+        "Number of time the hostname resolve failed",
+        &["target", "version"],
+        registry
+      )?,
+    },
+    send: MetricsSend {
+      duplicates: prometheus::register_int_counter_vec_with_registry!(
+        "ping_duplicates",
+        "Number of duplicate packages received",
+        &["target", "version"],
+        registry
+      )?,
+      errors: prometheus::register_int_counter_vec_with_registry!(
+        "ping_errors",
+        "Number of packets failed to send or receive due to errors",
+        &["target", "version"],
+        registry
+      )?,
+      rtt: prometheus::register_histogram_vec_with_registry!(
+        "ping_rtt",
+        "Round Trip Time of the packets send to the targets",
+        &["target", "version"],
+        rtt_buckets,
+        registry
+      )?,
+      timeouts: prometheus::register_int_counter_vec_with_registry!(
+        "ping_timeouts",
+        "Number of packets for which no answer was received in the maxium bucket time",
+        &["target", "version"],
+        registry
+      )?,
+    },
+    target: MetricsTarget {
+      total: prometheus::register_int_gauge_with_registry!(
+        "ping_targets",
+        "Number of currently active targets",
+        registry
+      )?,
+      dynamic: prometheus::register_int_gauge_with_registry!(
+        "ping_dynamic_targets",
+        "Number of currently active dynamic targets",
+        registry
+      )?,
+    },
     send_timeout,
   })
 }
@@ -397,11 +399,73 @@ impl App {
     )
     .await
     {
-      error!("Timeout while waiting for all lsitener tasks to finish");
+      error!("Timeout while waiting for all listener tasks to finish");
     }
 
     // Return the potential error of the first finished task
     Ok(res??)
+  }
+
+  #[expect(clippy::result_large_err)]
+  fn metrics_get_auth(&self, auth: Result<Auth, AuthRejection>) -> Result<(), Response> {
+    self
+      .auth_credentials
+      .as_ref()
+      .map_or(Ok(()), |auth_credentials| match auth {
+        Ok(Auth::Basic(basic)) => Self::metrics_get_auth_basic(auth_credentials, &basic),
+        Ok(Auth::Bearer(bearer)) => self.metrics_get_auth_bearer(auth_credentials, &bearer),
+        Err(e) => Err(e.into_response()),
+      })
+  }
+
+  #[expect(clippy::result_large_err)]
+  fn metrics_get_auth_basic(
+    auth_credentials: &args::AuthCredentials,
+    basic: &AuthBasic,
+  ) -> Result<(), Response> {
+    let Some(hash) = auth_credentials.basic.get(&basic.0) else {
+      return Err(
+        (
+          StatusCode::UNAUTHORIZED,
+          VerifyError::PasswordInvalid.to_string(),
+        )
+          .into_response(),
+      );
+    };
+
+    if let Err(e) = util::verify_password(basic.1.as_deref().unwrap_or_default(), hash) {
+      return Err((StatusCode::UNAUTHORIZED, e.to_string()).into_response());
+    }
+
+    debug!(user = %basic.0,"basic auth validated");
+    Ok(())
+  }
+
+  #[expect(clippy::result_large_err, clippy::cognitive_complexity)]
+  fn metrics_get_auth_bearer(
+    &self,
+    auth_credentials: &args::AuthCredentials,
+    bearer: &AuthBearer,
+  ) -> Result<(), Response> {
+    if auth_credentials.bearer.contains(&bearer.0) {
+      debug!("static bearer token match");
+      return Ok(());
+    }
+
+    if let Some(oidc_client) = &self.oidc_client {
+      match AccessToken::from_str(&bearer.0) {
+        Ok(token) => match token.claims(&oidc_client.id_token_verifier(), Ignore) {
+          Ok(claims) => {
+            debug!(subject = ?claims.subject().as_str(), expiration = ?claims.expiration(), "access_token validated");
+            return Ok(());
+          }
+          Err(error) => info!(?error, "verify access_token failed"),
+        },
+        Err(error) => info!(?error, "parse access_token failed"),
+      }
+    }
+
+    Err((StatusCode::UNAUTHORIZED, "Invalid access token").into_response())
   }
 
   async fn metrics_get(
@@ -409,48 +473,8 @@ impl App {
     Query(args): Query<MetricsGetArgs>,
     auth: Result<Auth, AuthRejection>,
   ) -> Response {
-    if let Some(auth_credentials) = self.auth_credentials.as_ref() {
-      match auth {
-        Ok(Auth::Basic(basic)) => {
-          let Some(hash) = auth_credentials.basic.get(&basic.0) else {
-            return (
-              StatusCode::UNAUTHORIZED,
-              VerifyError::PasswordInvalid.to_string(),
-            )
-              .into_response();
-          };
-
-          if let Err(e) = util::verify_password(basic.1.as_deref().unwrap_or_default(), hash) {
-            return (StatusCode::UNAUTHORIZED, e.to_string()).into_response();
-          }
-
-          debug!(user = %basic.0,"basic auth validated");
-        }
-
-        Ok(Auth::Bearer(bearer)) => 'success: {
-          if auth_credentials.bearer.contains(&bearer.0) {
-            debug!("static bearer token match");
-            break 'success;
-          }
-
-          if let Some(oidc_client) = &self.oidc_client {
-            match AccessToken::from_str(&bearer.0) {
-              Ok(token) => match token.claims(&oidc_client.id_token_verifier(), Ignore) {
-                Ok(claims) => {
-                  debug!(subject = ?claims.subject().as_str(), expiration = ?claims.expiration(), "access_token validated");
-                  break 'success;
-                }
-                Err(error) => info!(?error, "verify access_token failed"),
-              },
-              Err(error) => info!(?error, "parse access_token failed"),
-            }
-          }
-
-          return (StatusCode::UNAUTHORIZED, "Invalid access token").into_response();
-        }
-
-        Err(e) => return e.into_response(),
-      }
+    if let Err(resp) = self.metrics_get_auth(auth) {
+      return resp;
     }
 
     let target_names = args
@@ -555,9 +579,7 @@ struct MetricsGetArgs {
 }
 
 struct TargetMap {
-  ping_targets: IntGauge,
-  ping_dynamic_targets: IntGauge,
-
+  metrics: MetricsTarget,
   targets: Mutex<HashMap<String, TargetHandle>>,
   limit: usize,
   dynamic_hold_time: Duration,
@@ -568,8 +590,7 @@ struct TargetMap {
 
 impl TargetMap {
   fn new(
-    ping_targets: IntGauge,
-    ping_dynamic_targets: IntGauge,
+    metrics: MetricsTarget,
     limit: usize,
     dynamic_hold_time: Duration,
     send_args: Arc<TargetSendArgs>,
@@ -577,9 +598,7 @@ impl TargetMap {
     cancellation: CancellationToken,
   ) -> Arc<Self> {
     Arc::new(Self {
-      ping_targets,
-      ping_dynamic_targets,
-
+      metrics,
       targets: Mutex::default(),
       limit,
       dynamic_hold_time,
@@ -600,7 +619,7 @@ impl TargetMap {
       let target = targets.entry(new).and_modify(|t| {
         if permanent && !t.permanent {
           // Remove previously dynamic target
-          self.ping_dynamic_targets.dec();
+          self.metrics.dynamic.dec();
         }
         t.permanent |= permanent;
         t.last_seen = now;
@@ -611,9 +630,9 @@ impl TargetMap {
           continue;
         }
 
-        self.ping_targets.inc();
+        self.metrics.total.inc();
         if !permanent {
-          self.ping_dynamic_targets.inc();
+          self.metrics.dynamic.inc();
         }
 
         let hostname = v.key().to_owned();
@@ -643,7 +662,7 @@ impl TargetMap {
       if !retain {
         debug!(%hostname, "drop target");
         target.cancellation.cancel();
-        self.ping_dynamic_targets.dec();
+        self.metrics.dynamic.dec();
       }
       retain
     });
@@ -682,16 +701,13 @@ struct TargetSendArgs {
   send_timeout: Duration,
   client_v4: Client,
   client_v6: Client,
-  ping_duplicates: IntCounterVec,
-  ping_errors: IntCounterVec,
-  ping_rtt: HistogramVec,
-  ping_timeouts: IntCounterVec,
+  metrics: MetricsSend,
 }
 
 struct TargetResolveArgs {
   resolve_interval: Duration,
   resolver: TokioResolver,
-  ping_resolve_errors: IntCounterVec,
+  metrics: MetricsResolve,
 }
 
 #[derive(Debug)]
@@ -787,30 +803,30 @@ impl Target {
     }
 
     let values = &[&self.hostname, "icmp"];
-    if let Err(error) = args.ping_duplicates.remove_label_values(values) {
+    if let Err(error) = args.metrics.duplicates.remove_label_values(values) {
       warn!(?error, "ping_duplicates.remove_label_values");
     }
-    if let Err(error) = args.ping_errors.remove_label_values(values) {
+    if let Err(error) = args.metrics.errors.remove_label_values(values) {
       warn!(?error, "ping_errors.remove_label_values");
     }
-    if let Err(error) = args.ping_rtt.remove_label_values(values) {
+    if let Err(error) = args.metrics.rtt.remove_label_values(values) {
       warn!(?error, "ping_rtt.remove_label_values");
     }
-    if let Err(error) = args.ping_timeouts.remove_label_values(values) {
+    if let Err(error) = args.metrics.timeouts.remove_label_values(values) {
       warn!(?error, "ping_timeouts.remove_label_values");
     }
 
     let values6 = &[&self.hostname, "icmp6"];
-    if let Err(error) = args.ping_duplicates.remove_label_values(values6) {
+    if let Err(error) = args.metrics.duplicates.remove_label_values(values6) {
       warn!(?error, "ping_duplicates.remove_label_values");
     }
-    if let Err(error) = args.ping_errors.remove_label_values(values6) {
+    if let Err(error) = args.metrics.errors.remove_label_values(values6) {
       warn!(?error, "ping_errors.remove_label_values");
     }
-    if let Err(error) = args.ping_rtt.remove_label_values(values6) {
+    if let Err(error) = args.metrics.rtt.remove_label_values(values6) {
       warn!(?error, "ping_rtt.remove_label_values");
     }
-    if let Err(error) = args.ping_timeouts.remove_label_values(values6) {
+    if let Err(error) = args.metrics.timeouts.remove_label_values(values6) {
       warn!(?error, "ping_timeouts.remove_label_values");
     }
   }
@@ -832,28 +848,33 @@ impl Target {
         match self.send_ipv4(seq, addr, pinger).await {
           PingResult::Success(rtt) => {
             args
-              .ping_rtt
+              .metrics
+              .rtt
               .with_label_values([&self.hostname, "icmp"].as_slice())
               .observe(rtt.as_secs_f64());
           }
           PingResult::Timeout => {
             args
-              .ping_rtt
+              .metrics
+              .rtt
               .with_label_values([&self.hostname, "icmp"].as_slice())
               .observe(f64::INFINITY);
             args
-              .ping_timeouts
+              .metrics
+              .timeouts
               .with_label_values([&self.hostname, "icmp"].as_slice())
               .inc();
           }
           PingResult::Duplicate => {
             args
-              .ping_duplicates
+              .metrics
+              .duplicates
               .with_label_values([&self.hostname, "icmp"].as_slice())
               .inc();
           }
           PingResult::Error => args
-            .ping_errors
+            .metrics
+            .errors
             .with_label_values([&self.hostname, "icmp"].as_slice())
             .inc(),
         }
@@ -879,28 +900,33 @@ impl Target {
         match self.send_ipv6(seq, addr, pinger).await {
           PingResult::Success(rtt) => {
             args
-              .ping_rtt
+              .metrics
+              .rtt
               .with_label_values([&self.hostname, "icmp6"].as_slice())
               .observe(rtt.as_secs_f64());
           }
           PingResult::Timeout => {
             args
-              .ping_rtt
+              .metrics
+              .rtt
               .with_label_values([&self.hostname, "icmp6"].as_slice())
               .observe(f64::INFINITY);
             args
-              .ping_timeouts
+              .metrics
+              .timeouts
               .with_label_values([&self.hostname, "icmp6"].as_slice())
               .inc();
           }
           PingResult::Duplicate => {
             args
-              .ping_duplicates
+              .metrics
+              .duplicates
               .with_label_values([&self.hostname, "icmp6"].as_slice())
               .inc();
           }
           PingResult::Error => args
-            .ping_errors
+            .metrics
+            .errors
             .with_label_values([&self.hostname, "icmp6"].as_slice())
             .inc(),
         }
@@ -946,7 +972,7 @@ impl Target {
     let TargetResolveArgs {
       resolve_interval,
       resolver,
-      ping_resolve_errors,
+      metrics,
     } = args.as_ref();
     let mut interval = tokio::time::interval(*resolve_interval);
 
@@ -964,7 +990,8 @@ impl Target {
         Ok(addr) => addr,
         Err(e) => {
           info!("Could not resolve IPv4 address of {}: {}", self.hostname, e);
-          ping_resolve_errors
+          metrics
+            .errors
             .with_label_values([&self.hostname, "icmp"].as_slice())
             .inc();
           None
@@ -975,7 +1002,8 @@ impl Target {
         Ok(addr) => addr,
         Err(e) => {
           info!("Could not resolve IPv6 address of {}: {}", self.hostname, e);
-          ping_resolve_errors
+          metrics
+            .errors
             .with_label_values([&self.hostname, "icmp6"].as_slice())
             .inc();
           None
