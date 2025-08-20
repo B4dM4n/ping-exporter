@@ -114,12 +114,7 @@ async fn main() -> anyhow::Result<()> {
     oidc_client,
   ));
   app.clone().spawn_oidc_discovery();
-  let mut app = pin!(app.run(
-    cancellation.child_token(),
-    args.web_telemetry_path,
-    args.web_listen_address,
-    args.web_systemd_socket
-  ));
+  let mut app = pin!(app.run(cancellation.child_token(), args.web));
   let mut shutdown_signal = pin!(shutdown_signal());
 
   debug!("Waiting for shutdown signal");
@@ -328,24 +323,26 @@ impl App {
   async fn run(
     self: Arc<Self>,
     cancellation: CancellationToken,
-    mut web_telemetry_path: String,
-    web_listen_addresses: Vec<String>,
-    web_systemd_socket: bool,
+    args::Web {
+      mut telemetry_path,
+      listen_address,
+      systemd_socket,
+    }: args::Web,
   ) -> anyhow::Result<()> {
     use axum::{Router, routing::get};
 
-    if !web_telemetry_path.starts_with('/') {
-      web_telemetry_path.insert(0, '/');
+    if !telemetry_path.starts_with('/') {
+      telemetry_path.insert(0, '/');
     }
 
     let mut router = Router::new();
-    if web_telemetry_path != "/" {
+    if telemetry_path != "/" {
       router = router.route("/", get(async || ""));
     }
 
     let router = router
       .route(
-        &web_telemetry_path,
+        &telemetry_path,
         get({
           let this = self.clone();
           move |args, auth| this.metrics_get(args, auth)
@@ -370,14 +367,14 @@ impl App {
         }),
       );
 
-    let listeners = if web_systemd_socket {
+    let listeners = if systemd_socket {
       sd_notify::listen_fds()?
         .map(|fd| unsafe { std::net::TcpListener::from_raw_fd(fd) })
         .map(tokio::net::TcpListener::from_std)
         .collect::<Result<Vec<_>, IoError>>()?
     } else {
       futures_util::future::join_all(
-        web_listen_addresses
+        listen_address
           .into_iter()
           .map(tokio::net::TcpListener::bind),
       )
@@ -388,7 +385,7 @@ impl App {
     if listeners.is_empty() {
       bail!(
         "No listening socket configured{}",
-        if web_systemd_socket {
+        if systemd_socket {
           ". Systemd service was not activated by a socket unit"
         } else {
           ""

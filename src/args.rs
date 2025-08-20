@@ -56,25 +56,8 @@ pub struct Args {
   #[command(flatten)]
   pub metrics: Metrics,
 
-  /// Path under which to expose metrics
-  #[arg(
-    long = "web.telemetry-path",
-    default_value = "/metrics",
-    value_name = "PATH"
-  )]
-  pub web_telemetry_path: String,
-
-  /// Addresses on which to expose metrics and web interface.
-  #[arg(
-    long = "web.listen-address",
-    default_value = "0.0.0.0:9143",
-    value_name = "ADDRESS"
-  )]
-  pub web_listen_address: Vec<String>,
-
-  /// Listen on systemd provided sockets instead.
-  #[arg(long = "web.systemd-socket")]
-  pub web_systemd_socket: bool,
+  #[command(flatten)]
+  pub web: Web,
 
   /// YAML file containing authentication credentials.
   ///
@@ -82,6 +65,29 @@ pub struct Args {
   /// contained credentials are accepted.
   #[arg(long, value_name = "PATH", value_parser = AuthCredentials::path_value_parser())]
   pub auth_credentials: Option<AuthCredentials>,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct Web {
+  /// Path under which to expose metrics
+  #[arg(
+    long = "web.telemetry-path",
+    default_value = "/metrics",
+    value_name = "PATH"
+  )]
+  pub telemetry_path: String,
+
+  /// Addresses on which to expose metrics and web interface.
+  #[arg(
+    long = "web.listen-address",
+    default_value = "0.0.0.0:9143",
+    value_name = "ADDRESS"
+  )]
+  pub listen_address: Vec<String>,
+
+  /// Listen on systemd provided sockets instead.
+  #[arg(long = "web.systemd-socket")]
+  pub systemd_socket: bool,
 }
 
 #[derive(Debug, clap::Args)]
