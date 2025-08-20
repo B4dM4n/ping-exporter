@@ -157,20 +157,34 @@ where
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AuthCredentials {
+  /// Username and password pairs to accept when sent as `Basic` authorization.
   #[serde(default)]
   pub basic: HashMap<String, String>,
 
+  /// Static values to accept when sent as `Bearer` authorization.
   #[serde(default)]
   pub bearer: HashSet<String>,
 
+  /// OIDC parameters to validate tokens against when sent as `Bearer`
+  /// authorization.
   pub oidc: Option<AuthCredentialsOidc>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AuthCredentialsOidc {
+  /// The OIDC `client_id`.
   pub client_id: ClientId,
+
+  /// The OIDC issuer address, which must provide a
+  /// `.well-known/openid-configuration` file.
   pub issuer_url: IssuerUrl,
+
+  /// Don't treat issuer discovery errors as fatal and retry the process.
+  /// Until it succeeds, token validation will fail and requests will return
+  /// `401 unauthorized` errors (unless accepted by another credential source).
+  #[serde(default)]
+  pub retry_discovery: bool,
 }
 
 impl AuthCredentials {
@@ -196,7 +210,7 @@ impl AuthCredentials {
 }
 
 impl AuthCredentialsOidc {
-  async fn setup_oidc_client(self) -> anyhow::Result<OidcClient> {
+  pub async fn setup_oidc_client(self) -> anyhow::Result<OidcClient> {
     Ok(OidcClient::from_provider_metadata(
       CoreProviderMetadata::discover_async(self.issuer_url, &reqwest::Client::new())
         .await
@@ -227,28 +241,6 @@ where
         let u = map(t).await;
         Some(u)
       }
-      None => None,
-    }
-  }
-}
-
-pub trait AndThenAsync<F> {
-  type Output;
-  async fn and_then_async(self, and_then: F) -> Self::Output;
-}
-
-impl<T, U, F, Fu> AndThenAsync<F> for Option<T>
-where
-  T: Send,
-  U: Send,
-  F: FnOnce(T) -> Fu + 'static,
-  Fu: Future<Output = Option<U>> + Send,
-{
-  type Output = Option<U>;
-
-  async fn and_then_async(self, and_then: F) -> Self::Output {
-    match self {
-      Some(t) => and_then(t).await,
       None => None,
     }
   }

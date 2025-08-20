@@ -11,3 +11,4 @@ bearer:
 oidc:
   client_id: asdfg
   issuer_url: https://sso.example.com/application/o/app/
+  retry_discovery: true

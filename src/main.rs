@@ -16,8 +16,7 @@ use std::{
 };
 
 use anyhow::bail;
-use arc_swap::ArcSwap;
-use args::AndThenAsync as _;
+use arc_swap::{ArcSwap, ArcSwapOption};
 use axum::{
   extract::{ConnectInfo, Query},
   http::{Request, StatusCode, header},
@@ -30,7 +29,11 @@ use prometheus::{Encoder, HistogramVec, IntCounterVec, IntGauge, Registry};
 use rand::{rng, seq::IteratorRandom};
 use serde::Deserialize;
 use surge_ping::{Client, Config, ICMP, PingIdentifier, PingSequence, Pinger, SurgeError};
-use tokio::{sync::Mutex, task::JoinHandle, time::timeout};
+use tokio::{
+  sync::Mutex,
+  task::JoinHandle,
+  time::{sleep, timeout},
+};
 use tokio_util::sync::CancellationToken;
 use tower_http::trace::TraceLayer;
 use tracing::{Instrument as _, Level, debug, error, info, trace, warn};
@@ -95,12 +98,14 @@ async fn main() -> anyhow::Result<()> {
   targets.add(args.targets, true).await;
   drop(tokio::spawn(targets.clone().cleanup_task()));
 
-  let oidc_client = args
-    .auth_credentials
-    .as_ref()
-    .and_then_async(args::AuthCredentials::setup_oidc_client)
-    .await
-    .transpose()?;
+  let oidc_client = if let Some(auth_credentials) = &args.auth_credentials
+    && let Some(oidc) = &auth_credentials.oidc
+    && oidc.retry_discovery
+  {
+    ArcSwapOption::from_pointee(auth_credentials.setup_oidc_client().await.transpose()?)
+  } else {
+    ArcSwapOption::from_pointee(None)
+  };
 
   let app = Arc::new(App::new(
     registry,
@@ -108,6 +113,7 @@ async fn main() -> anyhow::Result<()> {
     args.auth_credentials,
     oidc_client,
   ));
+  app.clone().spawn_oidc_discovery();
   let mut app = pin!(app.run(
     cancellation.child_token(),
     args.web_telemetry_path,
@@ -276,7 +282,7 @@ struct App {
   registry: Registry,
   dynamic_targets: Option<Arc<TargetMap>>,
   auth_credentials: Option<args::AuthCredentials>,
-  oidc_client: Option<OidcClient>,
+  oidc_client: ArcSwapOption<OidcClient>,
 }
 
 impl App {
@@ -284,7 +290,7 @@ impl App {
     registry: Registry,
     dynamic_targets: Option<Arc<TargetMap>>,
     auth_credentials: Option<args::AuthCredentials>,
-    oidc_client: Option<OidcClient>,
+    oidc_client: ArcSwapOption<OidcClient>,
   ) -> Self {
     Self {
       registry,
@@ -292,6 +298,30 @@ impl App {
       auth_credentials,
       oidc_client,
     }
+  }
+
+  fn spawn_oidc_discovery(self: Arc<Self>) {
+    let this = self;
+    drop(tokio::spawn(async move {
+      if let Some(auth_credentials) = &this.auth_credentials
+        && let Some(oidc) = &auth_credentials.oidc
+        && oidc.retry_discovery
+      {
+        let client = loop {
+          match oidc.clone().setup_oidc_client().await {
+            Ok(client) => {
+              break client;
+            }
+            Err(error) => {
+              warn!(?error);
+              sleep(SECOND * 60).await;
+            }
+          }
+        };
+
+        this.oidc_client.store(Some(Arc::new(client)));
+      }
+    }));
   }
 
   #[tracing::instrument(ret, err, skip(self, cancellation))]
@@ -452,7 +482,7 @@ impl App {
       return Ok(());
     }
 
-    if let Some(oidc_client) = &self.oidc_client {
+    if let Some(oidc_client) = self.oidc_client.load().as_ref() {
       match AccessToken::from_str(&bearer.0) {
         Ok(token) => match token.claims(&oidc_client.id_token_verifier(), Ignore) {
           Ok(claims) => {
