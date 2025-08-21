@@ -22,6 +22,7 @@ use axum::{
   http::{Request, StatusCode, header},
   response::{IntoResponse as _, Response},
 };
+use futures_util::future::{join_all, select_all};
 use hickory_resolver::{ResolveError, ResolveErrorKind, TokioResolver, proto::ProtoErrorKind};
 use nix::sys::socket::{setsockopt, sockopt};
 use password_auth::VerifyError;
@@ -32,7 +33,7 @@ use surge_ping::{Client, Config, ICMP, PingIdentifier, PingSequence, Pinger, Sur
 use tokio::{
   sync::Mutex,
   task::JoinHandle,
-  time::{sleep, timeout},
+  time::{interval, sleep, timeout},
 };
 use tokio_util::sync::CancellationToken;
 use tower_http::trace::TraceLayer;
@@ -373,7 +374,7 @@ impl App {
         .map(tokio::net::TcpListener::from_std)
         .collect::<Result<Vec<_>, IoError>>()?
     } else {
-      futures_util::future::join_all(
+      join_all(
         listen_address
           .into_iter()
           .map(tokio::net::TcpListener::bind),
@@ -417,15 +418,10 @@ impl App {
       .collect::<Vec<_>>();
 
     // Wait for the first task to finish
-    let (res, _idx, handles) = futures_util::future::select_all(handles).await;
+    let (res, _idx, handles) = select_all(handles).await;
     // Cancel all other listener tasks and wait for them to complete
     cancellation.cancel();
-    if let Err(_e) = timeout(
-      Duration::from_secs(5),
-      futures_util::future::join_all(handles),
-    )
-    .await
-    {
+    if let Err(_e) = timeout(Duration::from_secs(5), join_all(handles)).await {
       error!("Timeout while waiting for all listener tasks to finish");
     }
 
@@ -698,7 +694,7 @@ impl TargetMap {
   #[tracing::instrument(ret(level = Level::DEBUG), skip(self))]
   async fn cleanup_task(self: Arc<Self>) {
     let mut cancelled = pin!(self.cancellation.cancelled());
-    let mut interval = tokio::time::interval(SECOND.max(self.dynamic_hold_time / 2));
+    let mut interval = interval(SECOND.max(self.dynamic_hold_time / 2));
 
     loop {
       trace!("loop");
@@ -792,7 +788,7 @@ impl Target {
       client_v6,
       ..
     } = args.as_ref();
-    let mut interval = tokio::time::interval(*send_interval);
+    let mut interval = interval(*send_interval);
 
     let mut seq = 0_u16;
     let mut id = PingIdentifier(rand::random());
@@ -1001,7 +997,7 @@ impl Target {
       resolver,
       metrics,
     } = args.as_ref();
-    let mut interval = tokio::time::interval(*resolve_interval);
+    let mut interval = interval(*resolve_interval);
 
     loop {
       tokio::select! {
