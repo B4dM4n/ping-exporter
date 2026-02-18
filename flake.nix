@@ -23,10 +23,10 @@
 
       rustNightly = pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default);
 
-      rustfmtNightly = pkgs.writeShellScriptBin "rustfmt" ''
-        exec ${rustNightly}/bin/rustfmt "$@"
-      '';
+      rustfmtNightly = rustNightly.availableComponents.rustfmt;
     in {
+      packages.rustNightly = rustNightly;
+
       devShell = pkgs.mkShell {
         preferLocalBuild = true;
 
