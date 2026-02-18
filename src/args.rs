@@ -217,8 +217,14 @@ impl AuthCredentials {
 
 impl AuthCredentialsOidc {
   pub async fn setup_oidc_client(self) -> anyhow::Result<OidcClient> {
+    let http_client = openidconnect::reqwest::ClientBuilder::new()
+      // Following redirects opens the client up to SSRF vulnerabilities.
+      .redirect(openidconnect::reqwest::redirect::Policy::none())
+      .build()
+      .context("create request Client")?;
+
     Ok(OidcClient::from_provider_metadata(
-      CoreProviderMetadata::discover_async(self.issuer_url, &reqwest::Client::new())
+      CoreProviderMetadata::discover_async(self.issuer_url, &http_client)
         .await
         .context("fetch OIDC issuer configuration")?,
       self.client_id,

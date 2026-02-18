@@ -11,24 +11,23 @@ version = "0.3.8"
 
 [dependencies]
 anyhow = "1.0"
-arc-swap = "1.7"
+arc-swap = "1.8"
 axum = { version = "0.8", features = ["tracing"] }
 base64 = "0.22"
 clap = { version = "4.5", features = ["derive"] }
 futures-util = { version = "0.3", default-features = false }
 hickory-resolver = { version = "0.25", features = ["tokio"] }
-humantime = "2.2"
-nix = { version = "0.30", features = ["socket"] }
+humantime = "2.3"
+nix = { version = "0.31", features = ["socket"] }
 openidconnect = "4.0"
 password-auth = "1.0"
 prometheus = { version = "0.14", default-features = false, features = ["process"] }
-rand = "0.9"
-reqwest = { version = "0.12", default-features = false }
+rand = "0.10"
 sd-notify = "0.4"
 serde = { version = "1.0", features = ["derive"] }
 serde_yml = "0.0"
 surge-ping = "0.8"
-tokio = { version = "1.47", features = ["macros", "signal", "rt-multi-thread"] }
+tokio = { version = "1.49", features = ["macros", "signal", "rt-multi-thread"] }
 tokio-util = "0.7"
 tower-http = { version = "0.6", features = ["trace"] }
 tracing = "0.1"
