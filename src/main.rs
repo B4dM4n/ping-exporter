@@ -114,20 +114,26 @@ async fn main() -> anyhow::Result<()> {
     args.auth_credentials,
     oidc_client,
   ));
-  app.clone().spawn_oidc_discovery();
-  let mut app = pin!(app.run(cancellation.child_token(), args.web));
-  let mut shutdown_signal = pin!(shutdown_signal());
+  let oidc_discovery_handle = tokio::spawn(
+    cancellation
+      .child_token()
+      .run_until_cancelled_owned(app.clone().oidc_discovery().in_current_span()),
+  );
+  let app = tokio::spawn(cancel_after(
+    cancellation.clone(),
+    app
+      .run(cancellation.child_token(), args.web)
+      .in_current_span(),
+  ));
+  let shutdown_signal = pin!(cancel_after(cancellation.clone(), shutdown_signal()));
 
   debug!("Waiting for shutdown signal");
-  tokio::select! {
-    _ = &mut app => {
-      cancellation.cancel();
-    }
-    () = &mut shutdown_signal => {
-      cancellation.cancel();
-      drop(app.await);
-    }
-  };
+  let ((), join_app_result, _) = tokio::join!(shutdown_signal, app, oidc_discovery_handle);
+  match join_app_result {
+    Ok(Ok(())) => (),
+    Ok(Err(err)) => return Err(err),
+    Err(_err) => (),
+  }
 
   let targets = std::mem::take(&mut *targets.targets.lock().await);
   for (
@@ -189,6 +195,13 @@ async fn shutdown_signal() {
     () = ctrl_c => {debug!("Ctrl-C received");},
     () = terminate => {debug!("SIGTERM received");},
   };
+}
+
+/// Cancel the given [`CancellationToken`] after the [`Future`] has finished.
+async fn cancel_after<T>(cancellation: CancellationToken, f: impl Future<Output = T>) -> T {
+  let res = f.await;
+  cancellation.cancel();
+  res
 }
 
 struct Metrics {
@@ -296,28 +309,25 @@ impl App {
     }
   }
 
-  fn spawn_oidc_discovery(self: Arc<Self>) {
-    let this = self;
-    drop(tokio::spawn(async move {
-      if let Some(auth_credentials) = &this.auth_credentials
-        && let Some(oidc) = &auth_credentials.oidc
-        && oidc.retry_discovery
-      {
-        let client = loop {
-          match oidc.clone().setup_oidc_client().await {
-            Ok(client) => {
-              break client;
-            }
-            Err(error) => {
-              warn!(?error);
-              sleep(SECOND * 60).await;
-            }
+  async fn oidc_discovery(self: Arc<Self>) {
+    if let Some(auth_credentials) = &self.auth_credentials
+      && let Some(oidc) = &auth_credentials.oidc
+      && oidc.retry_discovery
+    {
+      let client = loop {
+        match oidc.clone().setup_oidc_client().await {
+          Ok(client) => {
+            break client;
           }
-        };
+          Err(error) => {
+            warn!(?error);
+            sleep(SECOND * 60).await;
+          }
+        }
+      };
 
-        this.oidc_client.store(Some(Arc::new(client)));
-      }
-    }));
+      self.oidc_client.store(Some(Arc::new(client)));
+    }
   }
 
   #[tracing::instrument(ret, err, skip(self, cancellation))]
