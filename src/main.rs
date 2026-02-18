@@ -837,30 +837,30 @@ impl Target {
 
     let values = &[&self.hostname, "icmp"];
     if let Err(error) = args.metrics.duplicates.remove_label_values(values) {
-      warn!(?error, "ping_duplicates.remove_label_values");
+      debug!(?error, "ping_duplicates.remove_label_values");
     }
     if let Err(error) = args.metrics.errors.remove_label_values(values) {
-      warn!(?error, "ping_errors.remove_label_values");
+      debug!(?error, "ping_errors.remove_label_values");
     }
     if let Err(error) = args.metrics.rtt.remove_label_values(values) {
-      warn!(?error, "ping_rtt.remove_label_values");
+      debug!(?error, "ping_rtt.remove_label_values");
     }
     if let Err(error) = args.metrics.timeouts.remove_label_values(values) {
-      warn!(?error, "ping_timeouts.remove_label_values");
+      debug!(?error, "ping_timeouts.remove_label_values");
     }
 
     let values6 = &[&self.hostname, "icmp6"];
     if let Err(error) = args.metrics.duplicates.remove_label_values(values6) {
-      warn!(?error, "ping_duplicates.remove_label_values");
+      debug!(?error, "ping_duplicates.remove_label_values");
     }
     if let Err(error) = args.metrics.errors.remove_label_values(values6) {
-      warn!(?error, "ping_errors.remove_label_values");
+      debug!(?error, "ping_errors.remove_label_values");
     }
     if let Err(error) = args.metrics.rtt.remove_label_values(values6) {
-      warn!(?error, "ping_rtt.remove_label_values");
+      debug!(?error, "ping_rtt.remove_label_values");
     }
     if let Err(error) = args.metrics.timeouts.remove_label_values(values6) {
-      warn!(?error, "ping_timeouts.remove_label_values");
+      debug!(?error, "ping_timeouts.remove_label_values");
     }
   }
 
