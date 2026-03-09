@@ -212,7 +212,6 @@ struct Metrics {
 }
 
 struct MetricsSend {
-  duplicates: IntCounterVec,
   errors: IntCounterVec,
   rtt: HistogramVec,
   timeouts: IntCounterVec,
@@ -245,12 +244,6 @@ fn setup_metrics(registry: &Registry, args: &args::Metrics) -> anyhow::Result<Me
       )?,
     },
     send: MetricsSend {
-      duplicates: prometheus::register_int_counter_vec_with_registry!(
-        "ping_duplicates",
-        "Number of duplicate packages received",
-        &["target", "version"],
-        registry
-      )?,
       errors: prometheus::register_int_counter_vec_with_registry!(
         "ping_errors",
         "Number of packets failed to send or receive due to errors",
@@ -766,7 +759,6 @@ struct Addresses {
 enum PingResult {
   Success(Duration),
   Timeout,
-  Duplicate,
   Error,
 }
 
@@ -842,9 +834,6 @@ impl Target {
     }
 
     let values = &[&self.hostname, "icmp"];
-    if let Err(error) = args.metrics.duplicates.remove_label_values(values) {
-      debug!(?error, "ping_duplicates.remove_label_values");
-    }
     if let Err(error) = args.metrics.errors.remove_label_values(values) {
       debug!(?error, "ping_errors.remove_label_values");
     }
@@ -856,9 +845,6 @@ impl Target {
     }
 
     let values6 = &[&self.hostname, "icmp6"];
-    if let Err(error) = args.metrics.duplicates.remove_label_values(values6) {
-      debug!(?error, "ping_duplicates.remove_label_values");
-    }
     if let Err(error) = args.metrics.errors.remove_label_values(values6) {
       debug!(?error, "ping_errors.remove_label_values");
     }
@@ -901,13 +887,6 @@ impl Target {
             args
               .metrics
               .timeouts
-              .with_label_values([&self.hostname, "icmp"].as_slice())
-              .inc();
-          }
-          PingResult::Duplicate => {
-            args
-              .metrics
-              .duplicates
               .with_label_values([&self.hostname, "icmp"].as_slice())
               .inc();
           }
@@ -956,13 +935,6 @@ impl Target {
               .with_label_values([&self.hostname, "icmp6"].as_slice())
               .inc();
           }
-          PingResult::Duplicate => {
-            args
-              .metrics
-              .duplicates
-              .with_label_values([&self.hostname, "icmp6"].as_slice())
-              .inc();
-          }
           PingResult::Error => args
             .metrics
             .errors
@@ -980,7 +952,6 @@ impl Target {
       Ok((_packet, rtt)) => PingResult::Success(rtt),
       Err(err) => match err {
         SurgeError::Timeout { .. } => PingResult::Timeout,
-        SurgeError::IdenticalRequests { .. } => PingResult::Duplicate,
         _ => PingResult::Error,
       },
     }
@@ -992,7 +963,6 @@ impl Target {
       Ok((_packet, rtt)) => PingResult::Success(rtt),
       Err(err) => match err {
         SurgeError::Timeout { .. } => PingResult::Timeout,
-        SurgeError::IdenticalRequests { .. } => PingResult::Duplicate,
         _ => PingResult::Error,
       },
     }
