@@ -646,6 +646,7 @@ impl TargetMap {
   async fn add(&self, new_targets: impl IntoIterator<Item = String>, permanent: bool) {
     let mut targets = self.targets.lock().await;
     let now = Instant::now();
+    let mut over_limit = 0;
 
     for new in new_targets {
       let len = targets.len();
@@ -660,6 +661,7 @@ impl TargetMap {
 
       if let Entry::Vacant(v) = target {
         if len >= self.limit {
+          over_limit += 1;
           continue;
         }
 
@@ -683,6 +685,10 @@ impl TargetMap {
           join_resolve,
         });
       }
+    }
+
+    if over_limit > 0 {
+      warn!(limit = %self.limit, %over_limit, "ignoring targets");
     }
   }
 
